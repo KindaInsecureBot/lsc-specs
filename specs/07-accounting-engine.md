@@ -6,9 +6,13 @@ The Accounting Engine is the protocol's treasury. It manages the flow between:
 - **System surplus** — LSC accumulated from stability fees (minted by TaxCollector via LSCEngine::UpdateAccumulatedRate)
 - **Bad debt** — uncovered LSC debt from insolvent SAFEs pushed by LiquidationEngine
 
-When surplus exceeds a threshold, surplus auctions are triggered: users bid LOGOS to receive protocol LSC; the LOGOS is burned (deflationary). When bad debt accumulates, debt auctions are triggered: users bid LSC to receive freshly minted LOGOS (inflationary).
+When surplus exceeds a threshold, surplus auctions are triggered: users bid LOGOS to receive protocol LSC; the LOGOS is burned (deflationary).
 
-**Program ID aliases:** `ACCOUNTING_ENGINE_ID`, `SURPLUS_AUCTION_ID`, `DEBT_AUCTION_ID`
+When bad debt accumulates, it is first offset against available surplus via `SettleDebt`. Any bad debt that cannot be offset remains as a **protocol liability** in the debt queue. It is socialized across LSC holders through the redemption price mechanism (the PI controller, adjusting redemption rates, implicitly accounts for the system's reduced backing). Governance may decide on external recapitalization mechanisms, but these are out of scope for v1.
+
+The system does **not** mint new LOGOS tokens to cover bad debt. There is no debt auction.
+
+**Program ID aliases:** `ACCOUNTING_ENGINE_ID`, `SURPLUS_AUCTION_ID`
 
 ---
 
@@ -21,15 +25,10 @@ enum AccountingEngineInstruction {
     /// One-time initialization
     Initialize {
         surplus_auction_params_id: [u8; 32],
-        debt_auction_params_id: [u8; 32],
         lsc_engine_params_id: [u8; 32],
         lsc_token_def_id: [u8; 32],
-        logos_token_def_id: [u8; 32],
         surplus_auction_amount: u128,           // Rad (surplus sold per auction)
         surplus_buffer: u128,                   // Rad (buffer kept before auctioning)
-        debt_auction_lot_size: u128,            // Rad (debt covered per lot)
-        initial_debt_auction_mint_amount: u128, // Wad (LOGOS offered per lot initially)
-        max_debt_auction_size: u128,            // Rad (max debt per auction)
         surplus_auction_delay: u64,             // seconds between surplus auctions
     },
 
@@ -46,16 +45,10 @@ enum AccountingEngineInstruction {
     /// Trigger a surplus auction (permissionless, if conditions met)
     AuctionSurplus,
 
-    /// Trigger a debt auction (permissionless, if conditions met)
-    AuctionDebt,
-
     /// Update parameters (governance)
     UpdateParams {
         new_surplus_auction_amount: Option<u128>,
         new_surplus_buffer: Option<u128>,
-        new_debt_auction_lot_size: Option<u128>,
-        new_initial_debt_auction_mint_amount: Option<u128>,
-        new_max_debt_auction_size: Option<u128>,
         new_surplus_auction_delay: Option<u64>,
     },
 }
@@ -81,11 +74,9 @@ accounting_params.account_type = 60
 accounting_params.[all fields] = provided values
 accounting_params.last_surplus_auction_time = 0
 accounting_params.surplus_auction_nonce = 0
-accounting_params.debt_auction_nonce = 0
 
 debt_queue.account_type = 62
 debt_queue.queued_debt = 0
-debt_queue.debt_on_auction = 0
 debt_queue.entry_count = 0
 ```
 
@@ -135,7 +126,7 @@ debt_queue.queued_debt += debt_amount;
 
 **Errors:**
 - `Unauthorized`
-- `DebtQueueFull` — more than 256 entries (unlikely; settle first)
+- `DebtQueueFull` — more than 256 entries (settle first)
 
 ---
 
@@ -208,8 +199,6 @@ net_surplus_rad = surplus_balance_rad - queued_debt
 net_surplus_rad > accounting_params.surplus_buffer + accounting_params.surplus_auction_amount
 AND
 current_timestamp >= accounting_params.last_surplus_auction_time + accounting_params.surplus_auction_delay
-AND
-debt_queue.debt_on_auction == 0  // no ongoing debt auctions
 ```
 
 **Required Accounts:**
@@ -217,7 +206,7 @@ debt_queue.debt_on_auction == 0  // no ongoing debt auctions
 | # | Account | Writable | Auth | Description |
 |---|---|---|---|---|
 | 0 | `accounting_params_id` | Yes | — | Update nonce + timestamp |
-| 1 | `debt_queue_id` | No | — | Check debt_on_auction |
+| 1 | `debt_queue_id` | No | — | Read queued_debt for net surplus calculation |
 | 2 | `system_surplus_id` | Yes | PDA | Transfer LSC to auction |
 | 3 | `new_surplus_auction_id` (PDA) | Yes | PDA (new) | New auction account |
 | 4 | `surplus_auction_params_id` | No | — | Surplus auction program |
@@ -254,59 +243,6 @@ SurplusAuctionHouse::StartAuction {
 **Errors:**
 - `SurplusNotSufficient` — net surplus below threshold
 - `TooSoon` — delay not elapsed
-- `DebtAuctionOngoing` — cannot run surplus auction while debt auction active
-
----
-
-### 1.6 `AuctionDebt`
-
-**Description:** Initiates a debt auction when there is unhealed bad debt exceeding the surplus. LOGOS is minted and sold to market participants who pay LSC.
-
-**Trigger conditions:**
-```
-queued_debt = debt_queue.queued_debt
-surplus_balance_rad = system_surplus_lsc_balance * RAY
-
-unhealed_debt_rad = queued_debt - surplus_balance_rad  // net debt after surplus offset
-
-unhealed_debt_rad >= accounting_params.debt_auction_lot_size
-AND
-debt_queue.debt_on_auction == 0  // only one debt auction at a time (for simplicity)
-```
-
-**Required Accounts:**
-
-| # | Account | Writable | Auth | Description |
-|---|---|---|---|---|
-| 0 | `accounting_params_id` | Yes | — | Update nonce |
-| 1 | `debt_queue_id` | Yes | — | Update debt_on_auction |
-| 2 | `new_debt_auction_id` (PDA) | Yes | PDA (new) | New debt auction account |
-| 3 | `debt_auction_params_id` | No | — | Debt auction program |
-| 4 | `lsc_market_oracle_id` | No | — | For timestamp |
-
-**State Transition:**
-```
-let lot = min(
-    accounting_params.debt_auction_lot_size,
-    debt_queue.queued_debt - surplus_balance_rad,
-);
-
-debt_queue.debt_on_auction += lot
-accounting_params.debt_auction_nonce += 1
-```
-
-**Chained Calls:**
-```
-DebtAuctionHouse::StartAuction {
-    amount_to_raise: lot,  // Rad of LSC to raise
-    initial_mint_amount: accounting_params.initial_debt_auction_mint_amount,  // Wad of LOGOS to offer
-    // accounts: [debt_auction_params_id, new_debt_auction_id (auth)]
-}
-```
-
-**Errors:**
-- `InsufficientDebt` — unhealed debt < lot_size
-- `DebtAuctionOngoing`
 
 ---
 
@@ -494,213 +430,7 @@ TokenProgram::Burn {
 
 ---
 
-## 3. DebtAuctionHouse Program
-
-**Program ID alias:** `DEBT_AUCTION_ID`
-
-A **decreasing-amount auction**: the protocol needs to raise a fixed amount of LSC. Bidders compete by accepting fewer and fewer LOGOS for providing the needed LSC. The winner is whoever accepts the fewest LOGOS. The LOGOS offered is then minted.
-
-### 3.1 Instruction Enum
-
-```rust
-enum DebtAuctionInstruction {
-    /// Initialize (one-time)
-    Initialize {
-        accounting_engine_params_id: [u8; 32],
-        logos_token_def_id: [u8; 32],
-        lsc_token_def_id: [u8; 32],
-        bid_decrease: u128,            // Wad (min reduction per bid, e.g. 5%)
-        bid_duration: u64,             // seconds
-        total_auction_length: u64,     // hard deadline
-    },
-
-    /// Start a new debt auction (called by AccountingEngine — privileged)
-    StartAuction {
-        amount_to_raise: u128,         // Rad (LSC needed)
-        initial_mint_amount: u128,     // Wad (LOGOS offered initially)
-    },
-
-    /// Place a bid (offer to receive fewer LOGOS for the fixed LSC)
-    DecreaseSoldAmount {
-        auction_id: u64,
-        logos_amount: u128,   // Wad (bidder's offered LOGOS amount — must be LESS than current)
-    },
-
-    /// Settle the auction (mint LOGOS to winner, send LSC to accounting engine)
-    SettleAuction {
-        auction_id: u64,
-    },
-
-    /// Restart expired auction with increased mint amount
-    RestartAuction {
-        auction_id: u64,
-    },
-}
-```
-
----
-
-### 3.2 `StartAuction`
-
-**Authorization:** `accounting_engine_params_id` must be `is_authorized`.
-
-**Required Accounts:**
-
-| # | Account | Writable | Auth | Description |
-|---|---|---|---|---|
-| 0 | `debt_auction_params_id` | No | — | — |
-| 1 | `new_auction_id` (PDA) | Yes | PDA (new) | — |
-| 2 | `accounting_engine_params_id` | No | Yes (PDA) | Authorization |
-| 3 | `lsc_market_oracle_id` | No | — | Timestamp |
-
-**State Transition:**
-```
-new_auction.account_type = 80
-new_auction.auction_id = nonce
-new_auction.amount_to_raise = amount_to_raise
-new_auction.amount_to_mint = initial_mint_amount
-new_auction.high_bidder = [0; 32]
-new_auction.bid_time = current_timestamp
-new_auction.auction_deadline = current_timestamp + debt_auction_params.total_auction_length
-new_auction.bid_duration = debt_auction_params.bid_duration
-new_auction.bid_decrease = debt_auction_params.bid_decrease
-new_auction.settled = false
-```
-
----
-
-### 3.3 `DecreaseSoldAmount`
-
-**Description:** Bidder says: "I'll pay the fixed LSC in exchange for only X LOGOS (less than current offer)."
-
-**Required Accounts:**
-
-| # | Account | Writable | Auth | Description |
-|---|---|---|---|---|
-| 0 | `auction_id` | Yes | — | The auction |
-| 1 | `bidder_account` | No | Yes | Bidder |
-| 2 | `bidder_lsc_holding_id` | Yes | Yes | Bidder's LSC (escrow) |
-| 3 | `prev_bidder_lsc_holding_id` | Yes | — | Previous bidder's LSC (refunded) |
-| 4 | `auction_lsc_holding_id` | Yes | PDA | Temp LSC holding |
-| 5 | `lsc_market_oracle_id` | No | — | Timestamp |
-
-**Validations:**
-```
-assert!(!auction.settled, AuctionSettled);
-assert!(current_timestamp < auction.auction_deadline, AuctionExpired);
-
-// Must offer FEWER LOGOS than current (decreasing auction)
-let max_logos = if auction.amount_to_mint == initial_mint_amount {
-    auction.amount_to_mint  // First bid can be at most initial
-} else {
-    auction.amount_to_mint - auction.amount_to_mint * auction.bid_decrease / WAD
-};
-assert!(logos_amount <= max_logos, BidNotLowEnough);
-assert!(logos_amount > 0, ZeroBid);
-```
-
-**State Transition:**
-```
-let prev_bidder = auction.high_bidder;
-let lsc_to_escrow = auction.amount_to_raise / RAY;  // Rad → Wad
-
-auction.high_bidder = bidder_account.id
-auction.amount_to_mint = logos_amount
-auction.bid_time = current_timestamp
-if auction.auction_deadline - current_timestamp < auction.bid_duration:
-    auction.auction_deadline = current_timestamp + auction.bid_duration
-```
-
-**Chained Calls:**
-```
-// 1. Refund previous bidder's LSC
-if prev_bidder != [0; 32] {
-    TokenProgram::Transfer {
-        amount_to_transfer: lsc_to_escrow,
-        // accounts: [auction_lsc_holding_id (PDA auth), prev_bidder_lsc_holding_id]
-    }
-}
-
-// 2. New bidder deposits LSC to escrow
-TokenProgram::Transfer {
-    amount_to_transfer: lsc_to_escrow,
-    // accounts: [bidder_lsc_holding_id (auth), auction_lsc_holding_id]
-}
-```
-
----
-
-### 3.4 `SettleAuction`
-
-**Description:** Winner receives minted LOGOS; LSC goes to system surplus to cancel bad debt.
-
-**Required Accounts:**
-
-| # | Account | Writable | Auth | Description |
-|---|---|---|---|---|
-| 0 | `auction_id` | Yes | — | The auction |
-| 1 | `debt_queue_id` | Yes | — | Reduce debt_on_auction |
-| 2 | `auction_lsc_holding_id` | Yes | PDA | LSC to send to surplus |
-| 3 | `accounting_engine_surplus_id` | Yes | — | Receives LSC |
-| 4 | `winner_logos_holding_id` | Yes | — | Winner receives LOGOS |
-| 5 | `logos_token_def_id` | No | — | For minting LOGOS |
-| 6 | `lsc_market_oracle_id` | No | — | Timestamp |
-
-**Validations:**
-```
-assert!(current_timestamp >= auction.auction_deadline, AuctionNotEnded);
-assert!(!auction.settled, AuctionSettled);
-assert!(auction.high_bidder != [0; 32], NoBids);
-```
-
-**State Transition:**
-```
-auction.settled = true
-debt_queue.debt_on_auction -= auction.amount_to_raise
-debt_queue.queued_debt -= auction.amount_to_raise
-```
-
-**Chained Calls:**
-```
-// 1. Send LSC from escrow to system surplus
-TokenProgram::Transfer {
-    amount_to_transfer: auction.amount_to_raise / RAY,  // Wad
-    // accounts: [auction_lsc_holding_id (PDA auth), accounting_engine_surplus_id]
-}
-
-// 2. Mint LOGOS to winner (inflationary)
-TokenProgram::Mint {
-    amount_to_mint: auction.amount_to_mint,
-    // accounts: [logos_token_def_id (minting auth = debt_auction PDA), winner_logos_holding_id]
-}
-```
-
-**Note:** The DebtAuctionHouse must be granted minting authority over the LOGOS token definition at deployment time by LOGOS governance.
-
----
-
-### 3.5 `RestartAuction` (DebtAuction)
-
-**Description:** If a debt auction expires with no bids, increase the LOGOS offered (make it more attractive) and restart.
-
-**Validations:**
-```
-assert!(current_timestamp > auction.auction_deadline, AuctionNotExpired);
-assert!(!auction.settled, AuctionSettled);
-```
-
-**State Transition:**
-```
-// Offer more LOGOS (inflate the offer to attract bidders)
-new_mint_amount = auction.amount_to_mint + auction.amount_to_mint * RESTART_MULTIPLIER / WAD
-// RESTART_MULTIPLIER = 50_000_000_000_000_000 = 5%
-auction.amount_to_mint = new_mint_amount
-auction.auction_deadline = current_timestamp + debt_auction_params.total_auction_length
-```
-
----
-
-## 4. System Surplus and Debt Flow
+## 3. System Surplus and Debt Flow
 
 ```
 Stability Fees
@@ -710,15 +440,13 @@ Stability Fees
      ▼
 SystemSurplusAccount (LSC balance)
      │
-     ├── if surplus > buffer + auction_lot:
+     ├── if net_surplus > buffer + auction_lot:
      │        AccountingEngine::AuctionSurplus
      │        → SurplusAuction: sell LSC for LOGOS
      │        → LOGOS burned (deflationary)
      │
-     └── if bad debt > surplus:
-              AccountingEngine::AuctionDebt
-              → DebtAuction: mint LOGOS for LSC
-              → LSC received cancels bad debt
+     └── AccountingEngine::SettleDebt (offset debt against surplus)
+              → burns surplus LSC, reduces debt queue
 
 Bad Debt (from liquidations)
      │
@@ -726,13 +454,25 @@ Bad Debt (from liquidations)
      ▼
 SystemDebtQueueAccount
      │
-     ├── AccountingEngine::SettleDebt (netting against surplus)
-     └── AccountingEngine::AuctionDebt (when surplus insufficient)
+     ├── AccountingEngine::SettleDebt (offset against surplus)
+     │
+     └── If surplus insufficient: debt remains as protocol liability
+              → socialized via redemption price mechanism
+              → governance may recapitalize externally (out of scope v1)
 ```
+
+### Bad Debt Resolution Philosophy
+
+The LSC system does not mint new LOGOS to cover bad debt. Instead:
+
+1. **Surplus offsets debt first** (`SettleDebt`): any stability fee surplus is used to cancel queued bad debt before triggering a surplus auction. Net surplus is what remains after this offset.
+2. **Unresolved debt is a protocol liability**: if `queued_debt > surplus_balance`, the difference represents LSC in circulation that is not fully backed by collateral. This is reflected in the system's backing ratio.
+3. **PI controller adjusts**: the redemption rate mechanism implicitly accounts for reduced backing — a weaker-backed LSC will tend to trade below redemption price, causing the PI controller to raise the redemption rate, incentivizing SAFEs to be closed (reducing LSC supply) until balance is restored.
+4. **Governance recapitalization**: in extreme scenarios, governance may arrange external capital injection (e.g., treasury purchase of collateral). This is outside the scope of v1 specs.
 
 ---
 
-## 5. Error Codes
+## 4. Error Codes
 
 ```rust
 enum AccountingEngineError {
@@ -741,7 +481,6 @@ enum AccountingEngineError {
     SurplusNotSufficient      = 5002,
     InsufficientDebt          = 5003,
     DebtQueueFull             = 5004,
-    DebtAuctionOngoing        = 5005,
     TooSoon                   = 5006,
     InsufficientSurplus       = 5007,
     InvalidPDA                = 5008,
@@ -756,18 +495,5 @@ enum SurplusAuctionError {
     BidTooLow                 = 5105,
     NoBids                    = 5106,
     InvalidPDA                = 5107,
-}
-
-enum DebtAuctionError {
-    AlreadyInitialized        = 5200,
-    Unauthorized              = 5201,
-    AuctionSettled            = 5202,
-    AuctionExpired            = 5203,
-    AuctionNotEnded           = 5204,
-    BidNotLowEnough           = 5205,
-    ZeroBid                   = 5206,
-    NoBids                    = 5207,
-    AuctionNotExpired         = 5208,
-    InvalidPDA                = 5209,
 }
 ```
