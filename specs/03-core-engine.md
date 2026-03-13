@@ -164,7 +164,6 @@ global_debt_id.data = GlobalDebtAccount {
     account_type: 4,
     total_debt: 0,
     total_surplus: 0,
-    total_unhealed_debt: 0,
     _reserved: [0; 32],
 }
 ```
@@ -660,7 +659,7 @@ safe.normalized_debt -= debt_amount
 safe.liquidated = true  // (if collateral_amount == safe.collateral && debt_amount == safe.normalized_debt)
 collateral_type.global_normalized_debt -= debt_amount
 global_debt.total_debt -= debt_amount * accumulated_rate  // Rad
-global_debt.total_unhealed_debt += (debt_amount * accumulated_rate - collateral_value_raised)  // if deficit
+// Any resulting bad debt is pushed to AccountingEngine::PushDebt by the LiquidationEngine caller
 ```
 
 **Chained Calls:**

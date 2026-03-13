@@ -216,10 +216,6 @@ struct GlobalDebtAccount {
     /// Unit: Rad
     pub total_surplus: u128,
 
-    /// Total unprocessed bad debt (queued in AccountingEngine)
-    /// Unit: Rad
-    pub total_unhealed_debt: u128,
-
     pub _reserved: [u8; 32],
 }
 ```
