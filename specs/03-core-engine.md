@@ -325,7 +325,8 @@ safe.last_modified_at = current_timestamp
 ```
 TokenProgram::Transfer {
     amount_to_transfer: amount,
-    // accounts: [caller_logos_holding_id (auth), collateral_vault_id]
+    // accounts: [caller_logos_holding_id (writable, is_authorized), collateral_vault_id (writable)]
+    // pda_seeds: []  (caller authorizes their own holding; no LSCEngine PDA needed here)
 }
 ```
 
@@ -392,7 +393,8 @@ safe.last_modified_at = current_timestamp
 ```
 TokenProgram::Transfer {
     amount_to_transfer: amount,
-    // accounts: [collateral_vault_id (PDA auth), recipient_logos_holding_id]
+    // accounts: [collateral_vault_id (writable, is_authorized), recipient_logos_holding_id (writable)]
+    // pda_seeds: [compute_pda_seed(b"vault" || collateral_type_id)]
 }
 ```
 
@@ -463,7 +465,10 @@ let lsc_to_mint = (amount * accumulated_rate) / RAY;  // Wad
 
 TokenProgram::Mint {
     amount_to_mint: lsc_to_mint,
-    // accounts: [lsc_token_def_id (PDA auth = system_params_id), recipient_lsc_holding_id]
+    // accounts: [lsc_token_def_id (writable, is_authorized), recipient_lsc_holding_id (writable)]
+    // pda_seeds: [compute_pda_seed(b"lsc_token_definition")]
+    // lsc_token_def_id is a PDA of LSCEngine derived from this seed.
+    // The runtime marks it is_authorized because LSCEngine provides its seed.
 }
 ```
 
@@ -670,7 +675,8 @@ global_debt.total_debt -= debt_amount * accumulated_rate  // Rad
 // Transfer collateral from vault to auction vault
 TokenProgram::Transfer {
     amount_to_transfer: collateral_amount,
-    // accounts: [collateral_vault_id (PDA auth), liquidation_auction_vault_id]
+    // accounts: [collateral_vault_id (writable, is_authorized), liquidation_auction_vault_id (writable)]
+    // pda_seeds: [compute_pda_seed(b"vault" || collateral_type_id)]
 }
 ```
 
@@ -724,7 +730,8 @@ global_debt.total_debt += (new_accumulated_rate - old_rate) * collateral_type.gl
 // Mint surplus LSC to accounting engine
 TokenProgram::Mint {
     amount_to_mint: surplus_wad,
-    // accounts: [lsc_token_def_id (PDA auth), accounting_engine_surplus_id]
+    // accounts: [lsc_token_def_id (writable, is_authorized), accounting_engine_surplus_id (writable)]
+    // pda_seeds: [compute_pda_seed(b"lsc_token_definition")]
 }
 ```
 

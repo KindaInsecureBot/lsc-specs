@@ -181,21 +181,16 @@ struct SafeAccount {
 
 ### 1.4 CollateralVaultAccount
 
-**PDA:** `LSC_ENGINE_ID.derive(b"vault" || collateral_type_id)`
-**Owner:** `LSC_ENGINE_ID`
+**PDA (account ID derived by):** `LSC_ENGINE_ID.derive(compute_pda_seed(b"vault" || collateral_type_id))`
+**Owner:** `TOKEN_PROGRAM_ID` (claimed by Token Program via `AccountPostState::new_claimed` during `InitializeAccount`)
 
-This is a **Token Program holding account** (TokenHolding) owned by the LSC Engine's vault PDA. It stores LOGOS tokens deposited as collateral.
+> **Note:** The account *ID* is a PDA of `LSC_ENGINE_ID`, but the account *owner* (program_owner) is `TOKEN_PROGRAM_ID` after initialization. LEZ's `validate_execution` allows only the owning program (`TOKEN_PROGRAM_ID`) to mutate the data. LSCEngine authorizes transfers from this vault by including `compute_pda_seed(b"vault" || collateral_type_id)` in `ChainedCall.pda_seeds` — the runtime then marks `collateral_vault_id` as `is_authorized = true` in the Token Program callee.
 
 ```rust
-/// This account is a TokenHolding account owned by TOKEN_PROGRAM_ID,
-/// but the holder authority is the CollateralVaultAccount PDA.
-/// The LSC Engine uses its PDA authorization to transfer from it.
-///
 /// TokenHolding { Fungible { definition_id: LOGOS_TOKEN_DEF_ID, balance: u128 } }
-/// Stored in the Token Program's account format.
+/// Account ID = PDA of LSC_ENGINE_ID (so LSCEngine can authorize transfers)
+/// program_owner = TOKEN_PROGRAM_ID (set by Token Program's InitializeAccount)
 ```
-
-The LSC Engine authorizes transfers from the vault by including the vault's PDA ID in the accounts list with `is_authorized = true` (the engine derives this PDA and can sign for it).
 
 ---
 
@@ -305,14 +300,10 @@ struct PIControllerStateAccount {
     /// e.g. 3600 (1 hour)
     pub update_delay: u64,
 
-    /// Minimum redemption rate output from controller
-    /// e.g. RAY - 5e24 (roughly -50% per year)
+    /// Per-second leak factor applied to error_integral each update (dampens windup)
+    /// e.g. 999_999_920_000_000_000_000_000_000 (≈ 0.99999992 per second ≈ 68% decay per year)
+    /// Unit: Ray; must be <= RAY
     pub per_second_cumulative_leak: u128,
-
-    /// Leak applied to integral each update (dampens windup)
-    /// e.g. 999_999_920_000_000_000_000_000_000 (≈ 0.99999992 per second)
-    /// Unit: Ray
-    pub integral_period_size: u64,
 
     /// Oracle Relayer params account ID (to read redemption price and market price)
     pub oracle_relayer_params_id: [u8; 32],
@@ -579,15 +570,15 @@ struct AccountingEngineParamsAccount {
 
 ### 7.2 SystemSurplusAccount
 
-**PDA:** `ACCOUNTING_ENGINE_ID.derive(b"system_surplus")`
-**Owner:** `ACCOUNTING_ENGINE_ID`
+**PDA (account ID derived by):** `ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"system_surplus"))`
+**Owner:** `TOKEN_PROGRAM_ID` (claimed by Token Program during `InitializeAccount`)
 
-This is a **Token Program holding account** (TokenHolding, Fungible) that holds the protocol's accumulated LSC surplus.
+> **Note:** The account *ID* is a PDA of `ACCOUNTING_ENGINE_ID`, but the account *owner* is `TOKEN_PROGRAM_ID`. AccountingEngine authorizes transfers by including `compute_pda_seed(b"system_surplus")` in `ChainedCall.pda_seeds`.
 
 ```rust
 /// TokenHolding { Fungible { definition_id: LSC_TOKEN_DEF_ID, balance: u128 } }
-/// Holder authority = ACCOUNTING_ENGINE_ID PDA
-/// The AccountingEngine authorizes transfers from this account via its PDA.
+/// Account ID = PDA of ACCOUNTING_ENGINE_ID
+/// program_owner = TOKEN_PROGRAM_ID (set by Token Program's InitializeAccount)
 ```
 
 ### 7.3 SystemLogosHoldingAccount
@@ -640,6 +631,43 @@ struct DebtQueueEntry {
 ---
 
 ## 8. Surplus Auction Accounts
+
+### 8.0 SurplusAuctionHouseParamsAccount
+
+**PDA:** `SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction_params"))`
+**Owner:** `SURPLUS_AUCTION_HOUSE_ID`
+
+```rust
+struct SurplusAuctionHouseParamsAccount {
+    pub account_type: u8,               // = 69
+
+    /// Governance account
+    pub governance_id: [u8; 32],
+
+    /// AccountingEngine params account ID (authorized to start auctions)
+    pub accounting_engine_params_id: [u8; 32],
+
+    /// LOGOS token definition ID (for burning LOGOS bids)
+    pub logos_token_def_id: [u8; 32],
+
+    /// Minimum bid increment (LOGOS); each bid must exceed prev by this fraction
+    /// e.g. 50_000_000_000_000_000 = 5%
+    /// Unit: Wad
+    pub bid_increase: u128,
+
+    /// Extension of auction deadline per new bid (seconds)
+    /// e.g. 10800 (3 hours)
+    pub bid_duration: u64,
+
+    /// Hard deadline from auction start (seconds)
+    /// e.g. 259200 (3 days)
+    pub total_auction_length: u64,
+
+    pub _reserved: [u8; 32],
+}
+```
+
+---
 
 ### 8.1 SurplusAuctionAccount
 
@@ -702,6 +730,11 @@ struct OracleConfigAccount {
     /// Maximum allowed age of a price feed (seconds)
     /// e.g. 3600 (1 hour)
     pub max_feed_age: u64,
+
+    /// Maximum allowed timestamp jump per SubmitPrice call (seconds)
+    /// Prevents keepers from submitting timestamps far in the future
+    /// e.g. 7200 (2 hours); range [300, 86400]; set by governance
+    pub max_timestamp_jump: u64,
 
     /// Minimum number of feeds required for a valid median
     /// e.g. 3
@@ -821,7 +854,12 @@ struct GlobalSettlementStateAccount {
     /// Unit: Rad
     pub total_outstanding_lsc: u128,
 
-    pub _reserved: [u8; 32],
+    /// Waiting period after settlement trigger before LSC redemption opens
+    /// SAFE owners have this window to redeem their collateral first
+    /// e.g. 259200 (3 days); range [86400, 604800]; set at Initialize
+    pub safe_redemption_period: u64,
+
+    pub _reserved: [u8; 24],
 }
 ```
 

@@ -30,8 +30,13 @@ LSC_ENGINE_ID owns:
   ├── SystemParamsAccount (PDA: ["system_params"])
   ├── CollateralTypeAccount (PDA: ["collateral_type", collateral_token_def_id])
   ├── SafeAccount (PDA: ["safe", safe_id])          -- one per SAFE
-  ├── CollateralVaultAccount (PDA: ["vault", collateral_type_id])
   └── GlobalDebtAccount (PDA: ["global_debt"])
+
+TOKEN_PROGRAM_ID owns (but ID is PDA of LSC_ENGINE_ID):
+  ├── CollateralVaultAccount (PDA of LSC_ENGINE_ID: ["vault", collateral_type_id])
+  │   -- LSCEngine authorizes transfers from this vault via ChainedCall.pda_seeds
+  └── LscTokenDefinitionAccount (PDA of LSC_ENGINE_ID: ["lsc_token_definition"])
+      -- LSCEngine authorizes minting LSC by including this seed in ChainedCall.pda_seeds
 
 ORACLE_RELAYER_ID owns:
   ├── OracleRelayerParamsAccount (PDA: ["oracle_relayer_params"])
@@ -71,8 +76,7 @@ GLOBAL_SETTLEMENT_ID owns:
   └── CollateralRedemptionAccount (PDA: ["redemption", collateral_type_id])
 
 TOKEN_PROGRAM_ID owns:
-  ├── LscTokenDefinitionAccount (PDA of Token Program)
-  ├── LogosTokenDefinitionAccount (pre-existing)
+  ├── LogosTokenDefinitionAccount (pre-existing, not a PDA of any LSC program)
   ├── UserLscHoldingAccount (user-held)
   └── UserLogosHoldingAccount (user-held)
 ```
@@ -81,78 +85,128 @@ TOKEN_PROGRAM_ID owns:
 
 ## 3. PDA Derivation
 
-All PDAs are computed as: `program.derive_account(seeds)` where seeds are concatenated bytes.
+`PdaSeed` is exactly `[u8; 32]`. All PDA seeds are computed by SHA256-hashing the variable-length input:
+
+```rust
+// Pattern (identical to the AMM program):
+fn compute_pda_seed(input_bytes: &[u8]) -> PdaSeed {
+    PdaSeed::new(
+        Sha256::hash_bytes(input_bytes)
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    )
+}
+
+// Account ID derivation:
+account_id = AccountId::from((&program_id, &compute_pda_seed(input_bytes)))
+```
+
+Where input bytes include fixed-size fields (account IDs are always 32 bytes, nonces 8 bytes), the input is length-deterministic. For string prefixes, use the exact byte values shown.
+
+`ProgramId` is `[u32; 8]`. `LSC_ENGINE_ID`, `TOKEN_PROGRAM_ID`, etc. are `ProgramId` constants.
 
 ### LSC Engine PDAs
 
 ```
-system_params_id        = LSC_ENGINE_ID.derive(b"system_params")
-collateral_type_id      = LSC_ENGINE_ID.derive(b"collateral_type" || collateral_token_def_id[0..32])
-safe_id                 = LSC_ENGINE_ID.derive(b"safe" || owner_account_id[0..32] || nonce[0..8])
-collateral_vault_id     = LSC_ENGINE_ID.derive(b"vault" || collateral_type_id[0..32])
-global_debt_id          = LSC_ENGINE_ID.derive(b"global_debt")
-```
-
-### Oracle Relayer PDAs
-
-```
-oracle_relayer_params_id = ORACLE_RELAYER_ID.derive(b"oracle_relayer_params")
-```
-
-### PI Controller PDAs
-
-```
-pi_controller_state_id  = PI_CONTROLLER_ID.derive(b"pi_controller_state")
+system_params_id    = LSC_ENGINE_ID.derive(compute_pda_seed(b"system_params"))
+collateral_type_id  = LSC_ENGINE_ID.derive(compute_pda_seed(b"collateral_type" || collateral_token_def_id[32]))
+safe_id             = LSC_ENGINE_ID.derive(compute_pda_seed(b"safe" || owner_account_id[32] || nonce[8]))
+collateral_vault_id = LSC_ENGINE_ID.derive(compute_pda_seed(b"vault" || collateral_type_id[32]))
+global_debt_id      = LSC_ENGINE_ID.derive(compute_pda_seed(b"global_debt"))
+lsc_token_def_id    = LSC_ENGINE_ID.derive(compute_pda_seed(b"lsc_token_definition"))
+// lsc_token_def_id is a PDA of LSC_ENGINE_ID — see §7 for minting authority details
 ```
 
 ### Tax Collector PDAs
 
 ```
-tax_collector_params_id = TAX_COLLECTOR_ID.derive(b"tax_collector_params")
+tax_collector_params_id = TAX_COLLECTOR_ID.derive(compute_pda_seed(b"tax_collector_params"))
+```
+
+### Oracle Relayer PDAs
+
+```
+oracle_relayer_params_id = ORACLE_RELAYER_ID.derive(compute_pda_seed(b"oracle_relayer_params"))
+```
+
+### PI Controller PDAs
+
+```
+pi_controller_state_id = PI_CONTROLLER_ID.derive(compute_pda_seed(b"pi_controller_state"))
 ```
 
 ### Liquidation Engine PDAs
 
 ```
-liquidation_params_id   = LIQUIDATION_ENGINE_ID.derive(b"liquidation_engine_params")
-liquidation_id          = LIQUIDATION_ENGINE_ID.derive(b"liquidation" || safe_id[0..32])
+liquidation_params_id = LIQUIDATION_ENGINE_ID.derive(compute_pda_seed(b"liquidation_engine_params"))
+liquidation_id        = LIQUIDATION_ENGINE_ID.derive(compute_pda_seed(b"liquidation" || safe_id[32]))
 ```
 
 ### Collateral Auction PDAs
 
 ```
-collateral_auction_params_id = COLLATERAL_AUCTION_ID.derive(b"collateral_auction_params")
-collateral_auction_id        = COLLATERAL_AUCTION_ID.derive(b"collateral_auction" || auction_nonce[0..8])
+collateral_auction_params_id = COLLATERAL_AUCTION_ID.derive(compute_pda_seed(b"collateral_auction_params"))
+collateral_auction_id        = COLLATERAL_AUCTION_ID.derive(compute_pda_seed(b"collateral_auction" || auction_nonce[8]))
+auction_vault_id             = COLLATERAL_AUCTION_ID.derive(compute_pda_seed(b"auction_vault" || collateral_type_id[32]))
 ```
 
 ### Accounting Engine PDAs
 
 ```
-accounting_params_id    = ACCOUNTING_ENGINE_ID.derive(b"accounting_engine_params")
-system_surplus_id       = ACCOUNTING_ENGINE_ID.derive(b"system_surplus")
-debt_queue_id           = ACCOUNTING_ENGINE_ID.derive(b"debt_queue")
+accounting_params_id = ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"accounting_engine_params"))
+system_surplus_id    = ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"system_surplus"))
+debt_queue_id        = ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"system_debt_queue"))
 ```
 
 ### Surplus Auction PDAs
 
 ```
-surplus_auction_id      = SURPLUS_AUCTION_ID.derive(b"surplus_auction" || auction_nonce[0..8])
+surplus_auction_params_id = SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction_params"))
+surplus_auction_id        = SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction" || auction_nonce[8]))
 ```
 
 ### Oracle Program PDAs
 
 ```
-oracle_feed_id          = ORACLE_PROGRAM_ID.derive(b"feed" || feed_id[0..8])
-median_oracle_id        = ORACLE_PROGRAM_ID.derive(b"median" || symbol[0..16])
-oracle_config_id        = ORACLE_PROGRAM_ID.derive(b"oracle_config")
+oracle_config_id = ORACLE_PROGRAM_ID.derive(compute_pda_seed(b"oracle_config"))
+oracle_feed_id   = ORACLE_PROGRAM_ID.derive(compute_pda_seed(b"feed" || feed_symbol[32]))
+median_oracle_id = ORACLE_PROGRAM_ID.derive(compute_pda_seed(b"median" || token_symbol[32]))
 ```
 
 ### Global Settlement PDAs
 
 ```
-settlement_state_id          = GLOBAL_SETTLEMENT_ID.derive(b"settlement_state")
-collateral_redemption_id     = GLOBAL_SETTLEMENT_ID.derive(b"redemption" || collateral_type_id[0..32])
+settlement_state_id      = GLOBAL_SETTLEMENT_ID.derive(compute_pda_seed(b"global_settlement_state"))
+settlement_collateral_id = GLOBAL_SETTLEMENT_ID.derive(compute_pda_seed(b"settlement_collateral" || collateral_type_id[32]))
 ```
+
+---
+
+## 3b. ChainedCall Authorization
+
+When a calling program issues a `ChainedCall`, it may include PDA seeds to authorize its own PDAs in the callee:
+
+```rust
+struct ChainedCall {
+    program_id: ProgramId,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_data: InstructionData,
+    pda_seeds: Vec<PdaSeed>,  // seeds of PDAs this program authorizes in the callee
+}
+```
+
+The LEZ runtime calls `compute_authorized_pdas(caller_program_id, pda_seeds)` to derive account IDs. Any account whose ID matches a derived PDA gets `is_authorized = true` in the callee's account list. This is the **only** mechanism by which a program can authorize its PDAs in downstream calls.
+
+**Examples:**
+
+- `LSCEngine` mints LSC by including `compute_pda_seed(b"lsc_token_definition")` in `ChainedCall.pda_seeds`. The runtime derives `lsc_token_def_id = LSC_ENGINE_ID.derive(that_seed)` and marks it `is_authorized = true` in the Token Program callee, satisfying the Mint authorization check.
+
+- `LSCEngine` authorizes a vault transfer by including `compute_pda_seed(b"vault" || collateral_type_id)` in `pda_seeds`. The vault PDA is then authorized in the Token Program Transfer call.
+
+- `GlobalSettlement` delegates collateral type mutation to `LSCEngine::FreezeCollateralType` by including `compute_pda_seed(b"global_settlement_state")` in `pda_seeds`. LSCEngine checks that `settlement_state_id` is authorized.
+
+Every chained call description in specs 03–09 lists the `pda_seeds` the calling program includes.
 
 ---
 
@@ -266,15 +320,17 @@ LSC is a **fungible token** managed by the Token Program:
 
 ```
 LscTokenDefinitionAccount:
-  - owned by: TOKEN_PROGRAM_ID
-  - definition_id: LSC_TOKEN_DEF_ID (constant, set at deployment)
-  - minting_authority: system_surplus_id (LSC Engine PDA)
+  - program_owner: TOKEN_PROGRAM_ID (claimed by Token Program at initialization)
+  - account_id: lsc_token_def_id = LSC_ENGINE_ID.derive(compute_pda_seed(b"lsc_token_definition"))
+    (a PDA of LSC_ENGINE_ID — this is how minting is authorized)
   - total_supply: tracked by Token Program
 ```
 
-The LSC Engine's `system_params_id` PDA is the authorized minting authority. Only LSCEngine can invoke `TokenProgram::Mint` for LSC (because the LSC token definition's `is_authorized` flag is set only when the calling chain includes LSCEngine as the minting authority).
+**LSC Minting Authority:** The LSC token definition account is a PDA of `LSC_ENGINE_ID`. When LSCEngine issues a `TokenProgram::Mint` chained call, it includes `pda_seeds: [compute_pda_seed(b"lsc_token_definition")]`. The LEZ runtime derives `lsc_token_def_id = LSC_ENGINE_ID.derive(that_seed)` and marks it `is_authorized = true` in the Token Program callee. The Token Program then allows minting because the definition account is authorized. **There is no `minting_authority` field in `TokenDefinition`.**
 
-LOGOS is a **pre-existing token** with its own token definition. No LSC program holds minting authority over LOGOS — the LSC system does not mint new LOGOS under any circumstances.
+Only LSCEngine can authorize `lsc_token_def_id` (only LSCEngine knows its own seeds), so only LSCEngine can mint LSC.
+
+LOGOS is a **pre-existing token** with its own token definition. The LOGOS token definition is **not** a PDA of any LSC program. LSC programs only hold and transfer existing LOGOS tokens — they **never** mint LOGOS under any circumstances.
 
 ---
 
@@ -284,9 +340,10 @@ Deployment must happen in this order:
 
 ```
 1. Deploy all LSC programs (upload binaries)
-2. TOKEN_PROGRAM::NewFungibleDefinition → creates LscTokenDefinitionAccount
-   (minting authority = system_params_id PDA of LSCEngine)
-3. LSCEngine::Initialize(params) → creates SystemParamsAccount, GlobalDebtAccount
+2. LSCEngine::Initialize(params) → creates SystemParamsAccount, GlobalDebtAccount
+   (also initializes lsc_token_def_id as a Token Program account via chained call,
+    using pda_seeds: [compute_pda_seed(b"lsc_token_definition")] so LSCEngine can mint)
+3. [lsc_token_def_id is now a PDA of LSC_ENGINE_ID, owned by TOKEN_PROGRAM_ID]
 4. LSCEngine::AddCollateralType(LOGOS_TOKEN_DEF_ID, params) → creates CollateralTypeAccount
 5. TaxCollector::Initialize(params) → creates TaxCollectorParamsAccount
 6. OracleProgram::Initialize → creates OracleConfigAccount
