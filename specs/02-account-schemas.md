@@ -469,6 +469,11 @@ struct CollateralAuctionHouseParamsAccount {
     /// Auction duration (seconds); if not settled by then, anyone can restart
     pub auction_ttl: u64,
 
+    /// Discount increment applied each time RestartAuction is called
+    /// e.g. 10_000_000_000_000_000 = 1% increment per restart
+    /// Unit: Wad
+    pub discount_increment: u128,
+
     /// Nonce counter for auction IDs
     pub auction_nonce: u64,
 

@@ -187,6 +187,7 @@ global_debt_id.data = GlobalDebtAccount {
 | 2 | `collateral_type_id` (PDA) | Yes | PDA (new) | Derived from token_def_id |
 | 3 | `collateral_vault_id` (PDA) | Yes | PDA (new) | Derived from collateral_type_id |
 | 4 | `logos_token_def_account` | No | — | Token definition for the collateral |
+| 5 | `lsc_market_oracle_id` | No | — | For `last_stability_fee_update` timestamp |
 
 **Validations:**
 - `governance_account.id == system_params.governance_id`
@@ -255,6 +256,7 @@ TokenProgram::InitializeAccount
 | 1 | `collateral_type_id` | No | — | The collateral type for this SAFE |
 | 2 | `safe_id` (PDA) | Yes | PDA (new) | Derived from caller + nonce |
 | 3 | `caller_account` | No | Yes | SAFE owner |
+| 4 | `lsc_market_oracle_id` | No | — | For `opened_at` / `last_modified_at` timestamps |
 
 **PDA Derivation:**
 ```
@@ -306,6 +308,7 @@ safe_id.data = SafeAccount {
 | 2 | `collateral_vault_id` | Yes | — | Vault that receives collateral |
 | 3 | `caller_logos_holding_id` | Yes | Yes | Caller's LOGOS token holding |
 | 4 | `caller_account` | No | Yes | Must be SAFE owner or operator |
+| 5 | `lsc_market_oracle_id` | No | — | For `last_modified_at` timestamp |
 
 **Validations:**
 - `safe.owner_id == caller_account.id` OR `caller_account.id in safe.allowed_operators`
@@ -497,6 +500,7 @@ TokenProgram::Mint {
 | 3 | `lsc_token_def_id` | No | — | LSC token definition |
 | 4 | `caller_lsc_holding_id` | Yes | Yes | Caller's LSC (burned from here) |
 | 5 | `caller_account` | No | Yes | SAFE owner or operator |
+| 6 | `lsc_market_oracle_id` | No | — | For `last_modified_at` timestamp |
 
 **Validations:**
 - Ownership check

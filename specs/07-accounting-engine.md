@@ -389,17 +389,27 @@ This instruction uses two chained calls (total: 2, within LEZ limit of 10):
 
 ```
 // 1. Swap LOGOS for LSC on AMM — output goes directly to system_surplus_id
+//
+// CRITICAL: The AMM Swap instruction expects accounts in exactly this order:
+//   [pool_def, vault_a, vault_b, user_holding_token_a, user_holding_token_b]
+// where vault_a/vault_b are AMM pool vaults and user_holding_a/b are the
+// caller's input and output holdings. The authorized holding (source) is
+// whichever token matches token_definition_id_in (LOGOS here).
+//
+// Assuming the LOGOS/LSC pool was created with LOGOS as token_a and LSC as token_b:
 AMM::Swap {
     swap_amount_in: logos_amount,        // Wad (LOGOS in)
     min_amount_out: min_lsc_out,         // Wad (LSC out, slippage guard)
     token_definition_id_in: logos_token_def_id,
     // accounts: [
-    //   governance_logos_holding_id (auth — caller's LOGOS),
-    //   amm_vault_logos_id (writable),
-    //   amm_vault_lsc_id (writable),
-    //   system_surplus_id (writable — receives LSC output),
-    //   amm_pool_def_id,
+    //   amm_pool_def_id (read/writable — AMM pool state),            // #0
+    //   amm_vault_logos_id (writable — AMM LOGOS vault, token_a),   // #1
+    //   amm_vault_lsc_id (writable — AMM LSC vault, token_b),       // #2
+    //   governance_logos_holding_id (writable, is_authorized — LOGOS in),  // #3
+    //   system_surplus_id (writable — receives LSC output),          // #4
     // ]
+    // pda_seeds: [] (governance_logos_holding authorized by governance signature,
+    //                not a PDA of AccountingEngine)
 }
 
 // Note: The AMM swap sends LSC directly to system_surplus_id.
@@ -407,6 +417,11 @@ AMM::Swap {
 // based on the lsc_acquired amount (computed from AMM pool state pre-swap).
 // Because LEZ executes atomically, the post-swap surplus balance reflects
 // lsc_acquired correctly.
+//
+// Pool token ordering note: if the LOGOS/LSC pool was initialized with LSC as
+// token_a and LOGOS as token_b, swap vault_logos and vault_lsc positions (#1/#2)
+// and user_holding positions (#3/#4) accordingly. The amm_program determines
+// ordering based on how NewDefinition was called at pool creation.
 ```
 
 **Note on chained call count:** `RecapitalizeWithLOGOS` issues 1 chained call (`AMM::Swap`). The AMM internally chains to `TokenProgram::Transfer` (2 calls), for a total depth of 3 nested calls — well within the LEZ limit of 10.
