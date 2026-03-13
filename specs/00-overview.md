@@ -21,7 +21,7 @@ LSC is architecturally derived from [RAI / Reflexer Finance](https://reflexer.fi
 | **Stability Fee** | An additional interest rate on SAFE debt, separate from (and additive to) the redemption rate. Accrues in the global `accumulated_rate` accumulator. |
 | **Liquidation** | Forced closure of an undercollateralized SAFE. Collateral is sold via fixed-discount auction to cover debt + penalty. |
 | **Surplus** | Protocol-owned LSC accumulated from stability fees. Auctioned off for LOGOS which is then burned. |
-| **Bad Debt** | Uncovered LSC debt after a failed liquidation. Settled by minting new LOGOS in a debt auction. |
+| **Bad Debt** | Uncovered LSC debt after a failed liquidation. Queued in the AccountingEngine and offset against future surplus. If unresolved, it remains as a protocol liability socialized across LSC holders via the redemption price mechanism. |
 | **Global Settlement** | An emergency shutdown mechanism that freezes the system and allows all SAFE owners to redeem collateral. |
 | **PDA** | Program-Derived Account — an account whose ID is deterministically derived from a program's seed space. |
 | **Ray** | Fixed-point number with 27 decimal places (10^27 = 1.0). Used for rates and price accumulators. |
@@ -57,19 +57,17 @@ LSC is architecturally derived from [RAI / Reflexer Finance](https://reflexer.fi
    │ Engine      │              │ (Redemption    │
    └──────┬──────┘              │  Price/Rate)   │
           │                     └────────────────┘
-    ┌─────┴──────┐
-    │            │
-┌───▼───┐   ┌───▼────┐
-│Surplus│   │  Debt  │
-│Auction│   │ Auction│
-└───────┘   └────────┘
           │
-          │
-   ┌──────▼──────┐       ┌──────────────┐
-   │ Liquidation │       │  AMM Program │
-   │ Engine      │◄─────►│ (LSC/LOGOS   │
-   └──────┬──────┘       │   Pool)      │
-          │              └──────────────┘
+   ┌──────▼──────┐
+   │   Surplus   │
+   │   Auction   │
+   └─────────────┘
+
+   ┌──────────────┐       ┌──────────────┐
+   │ Liquidation  │       │  AMM Program │
+   │ Engine       │◄─────►│ (LSC/LOGOS   │
+   └──────┬───────┘       │   Pool)      │
+          │               └──────────────┘
    ┌──────▼──────┐
    │  Collateral │
    │   Auction   │
@@ -90,9 +88,8 @@ LSC is architecturally derived from [RAI / Reflexer Finance](https://reflexer.fi
 | `PIController` | Computes new redemption rate from market/redemption price error |
 | `LiquidationEngine` | Identifies and liquidates undercollateralized SAFEs |
 | `CollateralAuctionHouse` | Sells confiscated collateral via fixed-discount auction |
-| `AccountingEngine` | Routes surplus to surplus auction; routes bad debt to debt auction |
+| `AccountingEngine` | Routes surplus to surplus auction; queues and offsets bad debt |
 | `SurplusAuctionHouse` | Accepts LSC bids; sells surplus LSC for LOGOS (burn) |
-| `DebtAuctionHouse` | Mints LOGOS; sells it for LSC to cover bad debt |
 | `OracleProgram` | Aggregates external price feeds; publishes collateral and LSC market prices |
 | `GlobalSettlement` | Emergency shutdown: freezes system, enables collateral redemption |
 
@@ -152,8 +149,10 @@ The key innovation — the **PI controller** — is directly ported from RAI's m
    → SurplusAuctionHouse: users bid LOGOS to receive surplus LSC
    → LOGOS burned
 
-6b. AccountingEngine::AuctionDebt (when bad debt > threshold)
-   → DebtAuctionHouse: users bid LSC to receive minted LOGOS
+6b. If bad debt remains after offsetting against surplus:
+   → Bad debt persists as a protocol liability in the debt queue
+   → Socialized across LSC holders via the redemption price mechanism
+   → Governance may decide on external recapitalization (out of scope for v1)
 ```
 
 ---
