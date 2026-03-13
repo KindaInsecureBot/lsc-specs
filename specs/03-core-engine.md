@@ -226,11 +226,13 @@ collateral_type_id.data = CollateralTypeAccount {
 
 **Chained Calls:**
 ```
-TokenProgram::InitializeAccount {
-    account: collateral_vault_id,
-    definition_id: logos_token_def_id,
-    holder_id: collateral_vault_id,
-}
+// InitializeAccount takes no instruction parameters — account positions determine behavior.
+// Account order: [definition_account (read), account_to_initialize (writable, new)]
+// The initialized account's holder is set to its own ID (the PDA).
+TokenProgram::InitializeAccount
+    Account list:
+      logos_token_def_account (read)           // #0: token definition
+      collateral_vault_id (writable, new)      // #1: account to initialize
 ```
 
 **Errors:**

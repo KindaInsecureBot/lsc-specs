@@ -293,10 +293,14 @@ When LSC programs create vault accounts, they initialize them as Token Program h
 
 ```
 // Pattern: Initialize a PDA as a Token Program holding account
+// InitializeAccount takes NO instruction parameters — account positions determine behavior.
+// Account order: [definition_account (read), account_to_initialize (writable, new)]
+// The initialized account's holder is set to its own ID automatically.
+// No is_authorized flag is required — anyone can initialize a holding account.
 ChainedCall → TokenProgram::InitializeAccount
   Account list:
-    new_holding_account_id (PDA, writable, is_authorized=true)
-    token_def_id (read)
+    token_def_id (read)                        // #0: token definition
+    new_holding_account_id (PDA, writable)     // #1: account to initialize
     // Token Program sets: holding_account.holder_id = new_holding_account_id
     // Token Program sets: holding_account.definition_id = token_def_id
     // Token Program sets: holding_account.balance = 0
