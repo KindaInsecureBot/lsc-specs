@@ -65,7 +65,7 @@ system_debt_queue = ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"system_debt_q
 
 surplus_auction  = SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction_params"))
 
-debt_auction     = DEBT_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"debt_auction_params"))
+// debt_auction PDA removed — DebtAuctionHouse has been removed from the LSC system
 
 global_settlement = GLOBAL_SETTLEMENT_ID.derive(compute_pda_seed(b"global_settlement_state"))
 
@@ -88,7 +88,7 @@ Also clarify that `ProgramId` is `[u32; 8]`, not a string. The `LSC_ENGINE_ID` e
 > ```
 > When LSCEngine issues a `TokenProgram::Mint` chained call, it includes `pda_seeds: [compute_pda_seed(b"lsc_token_definition")]` in the `ChainedCall`. The LEZ runtime then marks `lsc_token_def_id` as `is_authorized = true` in the callee's account list, satisfying the Token Program's mint authorization check. There is no `minting_authority` field in `TokenDefinition`.
 >
-> **LOGOS Minting Authority:** The LOGOS token definition must likewise be a PDA of `DEBT_AUCTION_HOUSE_ID` (the only program that mints LOGOS). Its PDA seed must be agreed upon between LOGOS deployment and DebtAuctionHouse initialization.
+> **LOGOS Minting Authority:** The LSC system does not mint LOGOS. The LOGOS token definition is owned by the LOGOS deployment and is not a PDA of any LSC program. LSC programs only hold and transfer existing LOGOS tokens (never mint them).
 >
 > Remove all references to `minting_authority` in token definition schemas.
 
@@ -152,9 +152,11 @@ max_timestamp_jump: u64  // seconds; initial value 7200; range [300, 86400]; set
 
 Update the `SubmitPrice` spec in 04 to read `max_timestamp_jump` from `OracleConfigAccount` instead of hardcoding 7200.
 
-### Fix 2.4 — Add SurplusAuctionHouseParamsAccount and DebtAuctionHouseParamsAccount [IMPORTANT — Audit §1.5]
+### Fix 2.4 — Add SurplusAuctionHouseParamsAccount [IMPORTANT — Audit §1.5]
 
-**Problem:** `SurplusAuctionHouse::Initialize` and `DebtAuctionHouse::Initialize` accept system parameters, but no params account schema is defined in spec 02.
+**Problem:** `SurplusAuctionHouse::Initialize` accepts system parameters, but no params account schema is defined in spec 02.
+
+> **Note:** The `DebtAuctionHouseParamsAccount` finding is no longer applicable — the DebtAuctionHouse has been removed from the LSC system.
 
 **Change:** Add:
 
@@ -166,15 +168,6 @@ SurplusAuctionHouseParamsAccount {
     total_auction_length: u64,  // seconds; hard deadline; initial 259200 (3d)
 }
 // PDA: SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction_params"))
-
-DebtAuctionHouseParamsAccount {
-    governance_id: AccountId,
-    bid_decrease: u128,         // Wad; min bid decrement for collateral; initial 50_000_000_000_000_000 (5%)
-    bid_duration: u64,          // seconds; initial 10800 (3h)
-    total_auction_length: u64,  // seconds; initial 259200 (3d)
-    initial_lot_size: u128,     // Wad; initial LOGOS per auction; initial lot_size for DebtAuction
-}
-// PDA: DEBT_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"debt_auction_params"))
 ```
 
 ### Fix 2.5 — Add safe_redemption_period to GlobalSettlementStateAccount [IMPORTANT — Audit §1.6]
@@ -477,25 +470,25 @@ assert!(caller_account.id == accounting_engine_params.liquidation_engine_params_
 
 Also ensure `accounting_engine_params.liquidation_engine_params_id` is set at initialization (it should store the LiquidationEngine params PDA or program ID for the check).
 
-### Fix 7.3 — DecreaseSoldAmount: Replace initial_mint_amount Reference [IMPORTANT]
+### Fix 7.3 — ~~DecreaseSoldAmount: Replace initial_mint_amount Reference~~ (N/A — DebtAuction Removed)
 
-**Problem:** `DebtAuctionHouse::DecreaseSoldAmount` references `auction.initial_mint_amount` which is never defined in `DebtAuctionStateAccount`.
+> **Not applicable.** The DebtAuctionHouse and `DecreaseSoldAmount` have been removed.
 
-**Change:** Replace with `auction.lot_size` (the amount of LOGOS to mint per auction, set at `StartAuction`). The field to decrease is the amount of LOGOS the winning bidder will receive, which starts at `lot_size` and decreases each time someone bids to receive less LOGOS for the same LSC. Rename `initial_mint_amount` → `lot_size` consistently, or add `lot_size: u128` to `DebtAuctionStateAccount` explicitly.
+### Fix 7.4 — Initialize SurplusAuction LOGOS Holding Account [IMPORTANT]
 
-### Fix 7.4 — Initialize Auction Holding Accounts [IMPORTANT]
+**Problem:** `SurplusAuctionHouse::StartAuction` uses `auction_logos_holding_id` but never initializes it as a Token Program holding account.
 
-**Problem:** `SurplusAuctionHouse::Initialize` and `DebtAuctionHouse::Initialize` never specify how their token holding accounts (e.g., the account that holds LOGOS during surplus auctions) are initialized as Token Program accounts.
-
-**Change:** Add to `SurplusAuction::Initialize` and `DebtAuction::Initialize`:
+**Change:** Add to `SurplusAuction::StartAuction` chained calls:
 ```
-// During Initialize, chain a call to create the auction holding account:
+// During StartAuction, chain a call to create the per-auction LOGOS holding account:
 ChainedCall → TokenProgram::InitializeAccount
-  accounts: [logos_token_def_id (read), surplus_auction_logos_holding_id (writable)]
-  pda_seeds: [compute_pda_seed(b"surplus_auction_logos_holding")]
-  // After this call, surplus_auction_logos_holding_id.program_owner = TOKEN_PROGRAM_ID
-  // and holds LOGOS for the duration of each surplus auction
+  accounts: [logos_token_def_id (read), auction_logos_holding_id (writable, new)]
+  pda_seeds: [compute_pda_seed(b"surplus_auction_logos" || auction_nonce[8])]
+  // After this call, auction_logos_holding_id.program_owner = TOKEN_PROGRAM_ID
+  // and is ready to hold LOGOS bids during the auction
 ```
+
+> **Note:** The `DebtAuction::Initialize` auction holding account finding is no longer applicable.
 
 ---
 
@@ -714,7 +707,7 @@ ChainedCall → LSCEngine::UpdateAccumulatedRate {
 | 04-oracle-system.md | — | max_timestamp_jump from config |
 | 05-pi-controller.md | i128 overflow (C7) | Kp sign convention, settlement check |
 | 06-liquidation-engine.md | — | Chained call count, discount_increment, StartAuction params |
-| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth, initial_mint_amount, holding account init |
+| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth, SurplusAuction holding account init (DebtAuction parts N/A) |
 | 08-global-settlement.md | FreezeCollateralType cross-program (C9), settlement accounting (C8) | Duplicate error code |
 | 09-token-integration.md | InitializeAccount order (C2), Burn order (C1) | — |
 | NEW: 03b-tax-collector.md | TaxCollector specification (C5) | — |
