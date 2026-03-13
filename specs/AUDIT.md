@@ -181,7 +181,7 @@ The `Mint` instruction checks `definition_account.is_authorized`. This `is_autho
 
 **The correct mechanism:** The LSC token definition account ID must itself be a **PDA of LSC_ENGINE_ID**. Then, when LSCEngine issues a chained call to `TokenProgram::Mint`, it includes the PDA seed for the definition in `ChainedCall.pda_seeds`, which causes the ledger to set `definition_account.is_authorized = true` for that PDA.
 
-The spec never specifies that the LSC token definition must be a PDA of LSCEngine, and never explains the `pda_seeds` mechanism for chained call authorization. Without this, there is no mechanism for LSCEngine to mint LSC. **The same issue applies to LOGOS minting authority for the DebtAuctionHouse.**
+The spec never specifies that the LSC token definition must be a PDA of LSCEngine, and never explains the `pda_seeds` mechanism for chained call authorization. Without this, there is no mechanism for LSCEngine to mint LSC. Note: the LSC system does not mint LOGOS — there is no DebtAuctionHouse in this design.
 
 ### 2.5 ChainedCall PDA Seeds Authorization Mechanism Never Explained 🟡
 
@@ -771,14 +771,14 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 | I-03 | GlobalDebtAccount.total_debt not updated in UpdateAccumulatedRate | 🟡 IMPORTANT | 03 |
 | I-04 | safe_nonce and vault_nonce fields dead/unused | 🟡 IMPORTANT | 02, 03 |
 | I-05 | RestartAuction discount_increment undefined | 🟡 IMPORTANT | 06 |
-| I-06 | DecreaseSoldAmount first-bid validation undefined variable | 🟡 IMPORTANT | 07 |
-| I-07 | SurplusAuction/DebtAuction params account schemas missing | 🟡 IMPORTANT | 02, 07 |
+| I-06 | ~~DecreaseSoldAmount first-bid validation undefined variable~~ (N/A — DebtAuction removed) | ~~🟡 IMPORTANT~~ | 07 |
+| I-07 | SurplusAuctionHouseParamsAccount missing (DebtAuction part N/A) | 🟡 IMPORTANT | 02, 07 |
 | I-08 | OracleConfigAccount missing max_timestamp_jump field | 🟡 IMPORTANT | 02, 04 |
 | I-09 | PIControllerStateAccount spurious integral_period_size field | 🟡 IMPORTANT | 02 |
 | I-10 | GlobalSettlementError duplicate Unauthorized variant | 🟡 IMPORTANT | 08 |
 | I-11 | pda_seeds for chained call authorization never explained | 🟡 IMPORTANT | 03, 06, 07, 08, 09 |
 | I-12 | CollateralAuction StartAuction missing collateral_type_id | 🟡 IMPORTANT | 06 |
-| I-13 | Auction holding accounts never initialized | 🟡 IMPORTANT | 07 |
+| I-13 | SurplusAuction LOGOS holding account never initialized (DebtAuction part N/A) | 🟡 IMPORTANT | 07 |
 | I-14 | PIController UpdateRate doesn't check settlement_active | 🟡 IMPORTANT | 05 |
 | I-15 | RedeemCollateral authorization condition misleading | 🟡 IMPORTANT | 08 |
 | M-01 | Settlement phase typo ("SAFERS") | 🟢 MINOR | 08 |
