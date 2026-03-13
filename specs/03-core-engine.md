@@ -116,7 +116,7 @@ enum Instruction {
     /// Update redemption rate across a collateral type's accumulated_rate
     /// (Called by TaxCollector — privileged)
     UpdateAccumulatedRate {
-        new_rate_multiplier: u128,   // Ray — the delta to multiply in
+        new_accumulated_rate: u128,  // Ray — the NEW absolute accumulated_rate (not a delta)
     },
 }
 ```
@@ -511,7 +511,7 @@ TokenProgram::Mint {
 safe.normalized_debt -= amount
 safe.last_modified_at = current_timestamp
 collateral_type.global_normalized_debt -= amount
-global_debt.total_debt -= lsc_to_burn  // Rad approx
+global_debt.total_debt -= amount * accumulated_rate  // Rad (normalized_debt × rate = Rad)
 ```
 
 **Chained Calls:**
@@ -691,30 +691,32 @@ TokenProgram::Transfer {
 | # | Account | Writable | Auth | Description |
 |---|---|---|---|---|
 | 0 | `collateral_type_id` | Yes | — | Collateral type to update |
-| 1 | `system_params_id` | No | — | For tax_collector check |
-| 2 | `tax_collector_params_id` | No | Yes (PDA) | Must be registered tax collector |
-| 3 | `accounting_engine_surplus_id` | Yes | — | Where surplus LSC is sent |
-| 4 | `lsc_token_def_id` | No | — | For minting surplus LSC |
+| 1 | `global_debt_id` | Yes | — | Global debt (updated for rate increase) |
+| 2 | `system_params_id` | No | — | For tax_collector check |
+| 3 | `tax_collector_params_id` | No | Yes (PDA) | Must be registered tax collector |
+| 4 | `accounting_engine_surplus_id` | Yes | — | Where surplus LSC is sent |
+| 5 | `lsc_token_def_id` | No | — | For minting surplus LSC |
 
 **Validations:**
 - `system_params.tax_collector_params_id == tax_collector_params_id.id`
 - `tax_collector_params_id.is_authorized == true`
-- `new_rate_multiplier >= RAY` (cannot reduce accumulated_rate)
+- `new_accumulated_rate >= collateral_type.accumulated_rate` (rate can only increase)
 - `collateral_type.active == true` (or allow even on inactive for fee collection)
 
 **State Transition:**
 ```
-delta_rate = new_rate_multiplier - RAY  // the per-second increase
-time_elapsed = current_timestamp - collateral_type.last_stability_fee_update
-
-// The rate multiplier is already time-adjusted by TaxCollector
+// new_accumulated_rate is the new ABSOLUTE accumulated_rate value,
+// pre-computed by TaxCollector as: old_rate * rpow(stability_fee, dt, RAY) / RAY
 old_rate = collateral_type.accumulated_rate
-collateral_type.accumulated_rate = new_rate_multiplier  // pre-computed by TaxCollector
+collateral_type.accumulated_rate = new_accumulated_rate
 collateral_type.last_stability_fee_update = current_timestamp
 
-// Surplus LSC minted = (new_rate - old_rate) * global_normalized_debt
-surplus_rad = (new_rate_multiplier - old_rate) * collateral_type.global_normalized_debt
+// Surplus LSC minted = rate increase × total normalized debt (in Rad)
+surplus_rad = (new_accumulated_rate - old_rate) * collateral_type.global_normalized_debt
 surplus_wad = surplus_rad / RAY
+
+// Also update global debt to reflect higher effective debt
+global_debt.total_debt += (new_accumulated_rate - old_rate) * collateral_type.global_normalized_debt
 ```
 
 **Chained Calls:**
@@ -728,7 +730,7 @@ TokenProgram::Mint {
 
 **Errors:**
 - `Unauthorized`
-- `RateDecrease` — new_rate_multiplier < RAY
+- `RateDecrease` — new_accumulated_rate < collateral_type.accumulated_rate
 
 ---
 
