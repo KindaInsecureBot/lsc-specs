@@ -554,9 +554,6 @@ struct AccountingEngineParamsAccount {
     /// Surplus Auction House params account ID
     pub surplus_auction_params_id: [u8; 32],
 
-    /// Debt Auction House params account ID
-    pub debt_auction_params_id: [u8; 32],
-
     /// LSC Engine params account ID
     pub lsc_engine_params_id: [u8; 32],
 
@@ -568,18 +565,6 @@ struct AccountingEngineParamsAccount {
     /// Unit: Rad
     pub surplus_buffer: u128,
 
-    /// Initial debt that triggers a debt auction
-    /// Unit: Rad
-    pub debt_auction_lot_size: u128,
-
-    /// Initial LOGOS offered per debt auction lot
-    /// Unit: Wad
-    pub initial_debt_auction_mint_amount: u128,
-
-    /// Maximum debt that can be auctioned at once
-    /// Unit: Rad
-    pub max_debt_auction_size: u128,
-
     /// Timestamp of last surplus auction
     pub last_surplus_auction_time: u64,
 
@@ -588,9 +573,6 @@ struct AccountingEngineParamsAccount {
 
     /// Nonce for surplus auction IDs
     pub surplus_auction_nonce: u64,
-
-    /// Nonce for debt auction IDs
-    pub debt_auction_nonce: u64,
 
     pub _reserved: [u8; 32],
 }
@@ -618,13 +600,9 @@ This is a **Token Program holding account** (TokenHolding, Fungible) that holds 
 struct SystemDebtQueueAccount {
     pub account_type: u8,               // = 62
 
-    /// Total bad debt queued (not yet auctioned)
+    /// Total bad debt queued (pending offset against surplus)
     /// Unit: Rad
     pub queued_debt: u128,
-
-    /// Total debt currently in active debt auctions
-    /// Unit: Rad
-    pub debt_on_auction: u128,
 
     /// Entries in the debt queue (up to 256)
     pub entries: [DebtQueueEntry; 256],
@@ -691,54 +669,9 @@ struct SurplusAuctionAccount {
 
 ---
 
-## 9. Debt Auction Accounts
+## 9. Oracle Program Accounts
 
-### 9.1 DebtAuctionAccount
-
-**PDA:** `DEBT_AUCTION_ID.derive(b"debt_auction" || auction_nonce_bytes)`
-**Owner:** `DEBT_AUCTION_ID`
-
-```rust
-struct DebtAuctionAccount {
-    pub account_type: u8,               // = 80
-
-    pub auction_id: u64,
-
-    /// Amount of LSC the winner must pay (fixed)
-    /// Unit: Rad
-    pub amount_to_raise: u128,
-
-    /// Current LOGOS amount offered to the winner (decreasing bids)
-    /// Unit: Wad
-    pub amount_to_mint: u128,
-
-    /// Current lowest bidder (willing to accept fewest LOGOS)
-    pub high_bidder: [u8; 32],
-
-    /// Timestamp of last bid
-    pub bid_time: u64,
-
-    /// Auction end time
-    pub auction_deadline: u64,
-
-    /// Min bid duration
-    pub bid_duration: u64,
-
-    /// Minimum bid decrease (e.g. 5%)
-    /// Unit: Wad
-    pub bid_decrease: u128,
-
-    pub settled: bool,
-
-    pub _reserved: [u8; 16],
-}
-```
-
----
-
-## 10. Oracle Program Accounts
-
-### 10.1 OracleConfigAccount
+### 9.1 OracleConfigAccount
 
 **PDA:** `ORACLE_PROGRAM_ID.derive(b"oracle_config")`
 **Owner:** `ORACLE_PROGRAM_ID`
@@ -765,7 +698,7 @@ struct OracleConfigAccount {
 }
 ```
 
-### 10.2 OracleFeedAccount
+### 9.2 OracleFeedAccount
 
 **PDA:** `ORACLE_PROGRAM_ID.derive(b"feed" || feed_id_bytes)`
 **Owner:** `ORACLE_PROGRAM_ID`
@@ -801,7 +734,7 @@ struct OracleFeedAccount {
 }
 ```
 
-### 10.3 MedianOracleAccount
+### 9.3 MedianOracleAccount
 
 **PDA:** `ORACLE_PROGRAM_ID.derive(b"median" || symbol_bytes)`
 **Owner:** `ORACLE_PROGRAM_ID`
@@ -837,9 +770,9 @@ struct MedianOracleAccount {
 
 ---
 
-## 11. Global Settlement Accounts
+## 10. Global Settlement Accounts
 
-### 11.1 GlobalSettlementStateAccount
+### 10.1 GlobalSettlementStateAccount
 
 **PDA:** `GLOBAL_SETTLEMENT_ID.derive(b"settlement_state")`
 **Owner:** `GLOBAL_SETTLEMENT_ID`
@@ -876,7 +809,7 @@ struct GlobalSettlementStateAccount {
 }
 ```
 
-### 11.2 CollateralRedemptionAccount
+### 10.2 CollateralRedemptionAccount
 
 **PDA:** `GLOBAL_SETTLEMENT_ID.derive(b"redemption" || collateral_type_id)`
 **Owner:** `GLOBAL_SETTLEMENT_ID`
@@ -909,7 +842,7 @@ struct CollateralRedemptionAccount {
 
 ---
 
-## 12. Serialization Notes
+## 11. Serialization Notes
 
 1. All structs must be serialized with **Borsh** with no padding (Borsh is a canonical schema).
 2. The first byte of every account data is `account_type` — a discriminator. Programs must check this on all passed-in accounts to prevent account confusion attacks.
@@ -920,7 +853,7 @@ struct CollateralRedemptionAccount {
 
 ---
 
-## 13. Account Size Reference
+## 12. Account Size Reference
 
 | Account | Approx Size (bytes) |
 |---|---|
@@ -934,10 +867,9 @@ struct CollateralRedemptionAccount {
 | LiquidationAccount | ~128 |
 | CollateralAuctionHouseParamsAccount | ~256 |
 | CollateralAuctionAccount | ~192 |
-| AccountingEngineParamsAccount | ~256 |
-| SystemDebtQueueAccount | ~4128 |
+| AccountingEngineParamsAccount | ~192 |
+| SystemDebtQueueAccount | ~4112 |
 | SurplusAuctionAccount | ~192 |
-| DebtAuctionAccount | ~192 |
 | OracleConfigAccount | ~128 |
 | OracleFeedAccount | ~128 |
 | MedianOracleAccount | ~384 |
