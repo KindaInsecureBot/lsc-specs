@@ -95,11 +95,12 @@ debt_queue.entry_count = 0
 **Chained Calls:**
 ```
 // Initialize the system_surplus as a Token Program LSC holding account
-TokenProgram::InitializeAccount {
-    account: system_surplus_id,
-    definition_id: lsc_token_def_id,
-    holder_id: system_surplus_id,  // PDA is its own holder authority
-}
+// Account order: [definition_account (read), account_to_initialize (writable, new)]
+// InitializeAccount takes no instruction parameters — positions determine behavior.
+TokenProgram::InitializeAccount
+  accounts: [lsc_token_def_id (read), system_surplus_id (writable, new)]
+  pda_seeds: [compute_pda_seed(b"system_surplus")]
+  // After this call: system_surplus_id.program_owner = TOKEN_PROGRAM_ID
 ```
 
 ---
@@ -476,6 +477,8 @@ enum SurplusAuctionInstruction {
 | 1 | `new_auction_id` (PDA) | Yes | PDA (new) | — |
 | 2 | `accounting_engine_params_id` | No | Yes (PDA) | Authorization |
 | 3 | `lsc_market_oracle_id` | No | — | Timestamp |
+| 4 | `logos_token_def_id` | No | — | For LOGOS holding initialization |
+| 5 | `auction_logos_holding_id` (PDA) | Yes | PDA (new) | Receives LOGOS bids during auction |
 
 **PDA derivation:**
 ```
@@ -494,6 +497,16 @@ new_auction.auction_deadline = current_timestamp + surplus_auction_params.total_
 new_auction.bid_duration = surplus_auction_params.bid_duration
 new_auction.bid_increase = surplus_auction_params.bid_increase
 new_auction.settled = false
+```
+
+**Chained Calls:**
+```
+// Initialize per-auction LOGOS holding account to receive bids
+TokenProgram::InitializeAccount
+  accounts: [logos_token_def_id (read), auction_logos_holding_id (writable, new)]
+  pda_seeds: [compute_pda_seed(b"surplus_auction_logos" || nonce[8])]
+  // After this call: auction_logos_holding_id.program_owner = TOKEN_PROGRAM_ID
+  // This account receives LOGOS bids and is burned at auction settlement
 ```
 
 ---

@@ -29,25 +29,45 @@ enum TokenInstruction {
 
 The Token Program's authorization model:
 - **Transfer:** The source holding account must have `is_authorized = true`
-- **Mint:** The token definition account must have `is_authorized = true` (the minting authority)
+- **Mint:** The token definition account must have `is_authorized = true`
 - **Burn:** The holder account must have `is_authorized = true`
 
-LSC programs authorize accounts by deriving their PDAs and including them as `is_authorized = true` in the account list of a chained call. This is the LEZ equivalent of ERC-20's `transferFrom` with approval.
+**Critical account ordering (MUST follow exactly):**
+
+```
+// TokenProgram::Burn — definition FIRST, holder SECOND:
+ChainedCall → TokenProgram::Burn { amount_to_burn: X }
+  accounts[0] = token_definition_id  (writable)                   // ← FIRST
+  accounts[1] = holder_account_id    (writable, is_authorized)    // ← SECOND
+  pda_seeds: [<seed for holder if it's a PDA of the caller>]
+
+// TokenProgram::Mint — definition FIRST (must be is_authorized), holder SECOND:
+ChainedCall → TokenProgram::Mint { amount_to_mint: X }
+  accounts[0] = token_definition_id  (writable, is_authorized)    // ← FIRST (minting auth)
+  accounts[1] = holder_account_id    (writable)                   // ← SECOND
+  pda_seeds: [<seed that derives token_definition_id>]
+
+// TokenProgram::InitializeAccount — definition FIRST, new account SECOND:
+ChainedCall → TokenProgram::InitializeAccount  (no instruction parameters)
+  accounts[0] = token_definition_id  (read)                       // ← FIRST
+  accounts[1] = new_holding_account  (writable, new)              // ← SECOND
+  pda_seeds: [<seed for new_holding_account if it's a PDA of the caller>]
+```
+
+LSC programs authorize their PDAs via `ChainedCall.pda_seeds`. This is the LEZ equivalent of ERC-20's `transferFrom` with approval.
 
 ### 1.3 LSC Token Setup
 
-**At deployment, one LSC token definition is created:**
+**At deployment, the LSC token definition is a PDA of LSCEngine:**
 
 ```
-TokenProgram::NewFungibleDefinition {
-    name: "LSC",
-    total_supply: 0,  // starts at 0; minted on demand
-}
-// The resulting LscTokenDefinitionAccount's ID = LSC_TOKEN_DEF_ID
-// Minting authority = system_params_id (LSCEngine PDA)
+// lsc_token_def_id = LSC_ENGINE_ID.derive(compute_pda_seed(b"lsc_token_definition"))
+// LSCEngine initializes this account via TokenProgram::NewFungibleDefinition
+// (or TokenProgram::InitializeAccount depending on Token Program API)
+// The account ID is a PDA of LSC_ENGINE_ID — this grants minting authority.
 ```
 
-**Authorization:** Only the LSCEngine's `system_params_id` PDA can authorize minting of LSC. When LSCEngine calls `TokenProgram::Mint`, it includes `system_params_id` with `is_authorized = true` in the chained call's account list.
+**Authorization:** LSCEngine authorizes minting by including `compute_pda_seed(b"lsc_token_definition")` in `ChainedCall.pda_seeds`. The LEZ runtime derives `lsc_token_def_id = LSC_ENGINE_ID.derive(that_seed)` and marks it `is_authorized = true` in the Token Program callee. There is no separate `minting_authority` field.
 
 ### 1.4 Token Operations by Program
 
@@ -66,13 +86,14 @@ ChainedCall {
     program_id: TOKEN_PROGRAM_ID,
     instruction: TokenInstruction::Mint { amount_to_mint: lsc_amount },
     accounts: [
-        AccountWithMetadata { id: lsc_token_def_id, is_authorized: true, is_writable: true },
-        AccountWithMetadata { id: user_lsc_holding_id, is_authorized: false, is_writable: true },
+        AccountWithMetadata { id: lsc_token_def_id, is_authorized: true, is_writable: true },  // ← FIRST
+        AccountWithMetadata { id: user_lsc_holding_id, is_authorized: false, is_writable: true }, // ← SECOND
     ],
+    pda_seeds: [compute_pda_seed(b"lsc_token_definition")],  // ← authorizes lsc_token_def_id
 }
 ```
 
-The `lsc_token_def_id` has `is_authorized: true` because the LSCEngine's `system_params_id` PDA was established as the minting authority for LSC at token creation time. The chained call includes it as authorized.
+The `lsc_token_def_id` gets `is_authorized: true` at runtime because LSCEngine includes `compute_pda_seed(b"lsc_token_definition")` in `pda_seeds`. The LEZ runtime derives `lsc_token_def_id = LSC_ENGINE_ID.derive(that_seed)` and marks it authorized.
 
 **Chained call pattern for Transfer (from vault):**
 ```

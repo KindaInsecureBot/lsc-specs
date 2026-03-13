@@ -200,11 +200,12 @@ CollateralAuctionHouse::StartAuction {
     collateral_to_sell: collateral_to_seize,
     amount_to_raise: amount_to_raise_rad,
     safe_id: safe_id,
-    // accounts: [collateral_auction_params_id, new_auction_id (auth), ...]
+    collateral_type_id: collateral_type_id,
+    // accounts: [collateral_auction_params_id, new_auction_id (auth), lsc_market_oracle_id]
 }
 ```
 
-**Note on chained call limit:** This sequence uses 3 chained calls. LEZ allows up to 10 per execution, so this is within limits.
+**Note on chained call limit:** This sequence uses 4 chained calls (LiquidateSafe emits 3: ConfiscateSafe, PushDebt, StartAuction; ConfiscateSafe itself emits 1 more: Token::Transfer). Total tree depth = 4, well within LEZ limit of 10.
 
 **Errors:**
 - `SettlementActive`
@@ -237,6 +238,7 @@ enum CollateralAuctionInstruction {
         min_discount: u128,           // Wad (hard minimum discount, usually 0)
         minimum_bid: u128,            // Wad (minimum collateral per purchase)
         auction_ttl: u64,             // seconds before auction can be restarted
+        discount_increment: u128,     // Wad (added to discount per RestartAuction; e.g. 10_000_000_000_000_000 = 1%)
     },
 
     /// Start a new collateral auction (called by LiquidationEngine — privileged)
@@ -244,6 +246,7 @@ enum CollateralAuctionInstruction {
         collateral_to_sell: u128,     // Wad
         amount_to_raise: u128,        // Rad
         safe_id: [u8; 32],
+        collateral_type_id: [u8; 32], // which collateral type is being auctioned
     },
 
     /// Buy collateral at the discounted price (anyone can call)
@@ -284,18 +287,19 @@ enum CollateralAuctionInstruction {
 **State Transition:**
 ```
 auction_params.account_type = 50
-auction_params.[all fields] = provided values
+auction_params.[all fields] = provided values  // including discount_increment
 auction_params.auction_nonce = 0
 ```
 
 **Chained Calls:**
 ```
 // Initialize vault as Token Program holding account
-TokenProgram::InitializeAccount {
-    account: auction_collateral_vault_id,
-    definition_id: LOGOS_TOKEN_DEF_ID,
-    holder_id: auction_collateral_vault_id,
-}
+// Account order: [definition_account (read), account_to_initialize (writable, new)]
+// InitializeAccount takes no instruction parameters — positions determine behavior.
+TokenProgram::InitializeAccount
+  accounts: [logos_token_def_id (read), auction_collateral_vault_id (writable, new)]
+  pda_seeds: [compute_pda_seed(b"auction_vault" || collateral_type_id)]
+  // After this call: auction_collateral_vault_id.program_owner = TOKEN_PROGRAM_ID
 ```
 
 ---
@@ -516,11 +520,13 @@ if auction.forgone_collateral > 0 {
 assert!(current_time > auction.expires_at, AuctionNotExpired);
 assert!(!auction.settled, AuctionSettled);
 
-// Increase discount by a fixed increment (e.g. 1%)
+// Increase discount by the configured increment
 new_discount = min(
-    auction_params.auction_discount + discount_increment,
+    auction_params.auction_discount + auction_params.discount_increment,
     auction_params.max_discount,
 )
+// Note: discount is re-applied at BuyCollateral time from params; store updated discount in auction account
+// or update params.auction_discount temporarily — implementation must track per-auction discount
 
 auction.expires_at = current_time + auction_params.auction_ttl
 // Note: discount is recomputed dynamically at BuyCollateral time based on params,

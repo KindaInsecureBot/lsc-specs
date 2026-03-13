@@ -53,7 +53,9 @@ Phase 5: COMPLETE
 ```rust
 enum GlobalSettlementInstruction {
     /// One-time initialization
-    Initialize,
+    Initialize {
+        safe_redemption_period: u64,  // seconds; default 259200 (3 days); range [86400, 604800]
+    },
 
     /// Trigger global settlement (governance only)
     TriggerSettlement,
@@ -112,6 +114,7 @@ settlement_state.collateral_types = [[0; 32]; 16]
 settlement_state.collateral_type_count = 0
 settlement_state.processed_count = 0
 settlement_state.total_outstanding_lsc = 0
+settlement_state.safe_redemption_period = safe_redemption_period
 ```
 
 ---
@@ -363,12 +366,12 @@ if net_collateral > 0 {
 ```
 assert!(settlement_state.active, SettlementNotActive);
 assert!(collateral_redemption.collateral_per_lsc == 0, AlreadySet);
-// Waiting period check:
+// Waiting period check: use the governance-configured safe_redemption_period
 assert!(
-    current_timestamp >= settlement_state.triggered_at + SAFE_REDEMPTION_PERIOD,
+    current_timestamp >= settlement_state.triggered_at + settlement_state.safe_redemption_period,
     WaitingPeriodNotElapsed
 );
-// SAFE_REDEMPTION_PERIOD = 3 days = 259200 seconds (recommended)
+// safe_redemption_period is set at Initialize; default 259200 (3 days); range [86400, 604800]
 ```
 
 **Computation:**
@@ -492,7 +495,7 @@ In v1, only LOGOS is a collateral type. The settlement process is applied once. 
 ```rust
 enum GlobalSettlementError {
     AlreadyInitialized          = 6000,
-    Unauthorized                = 6001,
+    NotGovernance               = 6001,  // caller is not the governance account
     SettlementNotActive         = 6002,
     SettlementAlreadyActive     = 6003,
     AlreadyFrozen               = 6004,
@@ -505,7 +508,9 @@ enum GlobalSettlementError {
     ZeroAmount                  = 6011,
     AlreadyLiquidated           = 6012,
     InvalidPDA                  = 6013,
-    CollateralTypeNotFrozen     = 6014,
+    NotGlobalSettlement         = 6014,  // caller is not the global settlement program
     SafeRedemptionPeriodActive  = 6015,
+    CollateralTypeNotFrozen     = 6016,
+    InvalidParams               = 6017,
 }
 ```
