@@ -8,7 +8,7 @@ The Accounting Engine is the protocol's treasury. It manages the flow between:
 
 When surplus exceeds a threshold, surplus auctions are triggered: users bid LOGOS to receive protocol LSC; the LOGOS is burned (deflationary).
 
-When bad debt accumulates, it is first offset against available surplus via `SettleDebt`. Any bad debt that cannot be offset remains as a **protocol liability** in the debt queue. It is socialized across LSC holders through the redemption price mechanism (the PI controller, adjusting redemption rates, implicitly accounts for the system's reduced backing). Governance may decide on external recapitalization mechanisms, but these are out of scope for v1.
+When bad debt accumulates, it is first offset against available surplus via `SettleDebt`. Any bad debt that cannot be offset remains as a **protocol liability** in the debt queue. It is socialized across LSC holders through the redemption price mechanism (the PI controller, adjusting redemption rates, implicitly accounts for the system's reduced backing). Governance can inject capital directly using `RecapitalizeWithLSC` (deposit LSC) or `RecapitalizeWithLOGOS` (deposit LOGOS, swapped for LSC on the AMM).
 
 The system does **not** mint new LOGOS tokens to cover bad debt. There is no debt auction.
 
