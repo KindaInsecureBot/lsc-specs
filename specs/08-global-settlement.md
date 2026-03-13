@@ -35,7 +35,7 @@ Phase 2: COLLATERAL TYPES FROZEN
          │
          │ Anyone calls ProcessSAFEs (removes surplus/deficit SAFEs)
          ▼
-Phase 3: SAFERS CAN REDEEM
+Phase 3: SAFE OWNERS CAN REDEEM
          │ SAFE owners call RedeemCollateral to reclaim excess collateral
          │
          │ (After SAFE redemption period, e.g., 3 days)
@@ -162,10 +162,11 @@ system_params.settlement_active = true
 
 | # | Account | Writable | Auth | Description |
 |---|---|---|---|---|
-| 0 | `settlement_state_id` | Yes | — | Register collateral type |
-| 1 | `collateral_type_id` | Yes | — | Freeze it |
-| 2 | `collateral_oracle_id` | No | — | Get final collateral price |
-| 3 | `lsc_market_oracle_id` | No | — | For timestamp |
+| 0 | `settlement_state_id` | Yes | PDA (GlobalSettlement) | Register collateral type; authorized PDA for chained call |
+| 1 | `collateral_type_id` | Yes | — | Passed to LSCEngine chained call |
+| 2 | `system_params_id` | No | — | For LSCEngine global_settlement_state_id check |
+| 3 | `collateral_oracle_id` | No | — | Get final collateral price |
+| 4 | `lsc_market_oracle_id` | No | — | For timestamp |
 
 **Validations:**
 ```
@@ -175,17 +176,37 @@ assert!(collateral_oracle.valid, OracleInvalid);
 assert!(settlement_state.collateral_type_count < 16, TooManyCollateralTypes);
 ```
 
-**State Transition:**
+**Note on account ownership:** `CollateralTypeAccount` is owned by `LSC_ENGINE_ID`. `GlobalSettlement` cannot write to it directly — only the owning program can modify account data (LEZ `validate_execution` rule). Therefore, `FreezeCollateralType` must delegate the collateral type mutation to `LSCEngine::FreezeCollateralType` via a chained call.
+
+**State Transition (GlobalSettlement side):**
 ```
 let final_price = collateral_oracle.median_price;  // Wad (USD per LOGOS)
-
-// Convert to Ray (USD per LOGOS in Ray units) for storage
-collateral_type.final_collateral_price = final_price * RAY / WAD;  // Ray
-collateral_type.active = false  // no new SAFEs can be opened
+let final_price_ray = final_price * RAY / WAD;     // convert to Ray
 
 // Register in settlement state
 settlement_state.collateral_types[settlement_state.collateral_type_count] = collateral_type_id
 settlement_state.collateral_type_count += 1
+```
+
+**Chained Calls:**
+```
+// Delegate collateral_type mutation to LSCEngine (which owns the account)
+// settlement_state_id is a PDA of GLOBAL_SETTLEMENT_ID — include its seed
+// so LSCEngine can verify the call comes from a registered GlobalSettlement.
+LSCEngine::FreezeCollateralType {
+    final_collateral_price: final_price_ray,
+    // accounts: [
+    //   collateral_type_id (writable),
+    //   system_params_id (read — to verify global_settlement_state_id),
+    //   settlement_state_id (is_authorized via PDA),
+    // ]
+}
+```
+
+The `LSCEngine::FreezeCollateralType` instruction verifies that `settlement_state_id` matches `system_params.global_settlement_state_id` and that it is authorized, then sets:
+```
+collateral_type.final_collateral_price = final_collateral_price
+collateral_type.active = false
 ```
 
 ---
@@ -293,8 +314,8 @@ let net_collateral = if safe.collateral >= debt_in_collateral {
 **Validations:**
 ```
 assert!(settlement_state.active, SettlementNotActive);
-assert!(collateral_type.settlement_processed == false || collateral_type.active == false);
-// (frozen collateral types have active = false)
+assert!(collateral_type.active == false, CollateralTypeNotFrozen);
+// (FreezeCollateralType sets active = false; this check ensures the type was frozen)
 assert!(!safe.liquidated, AlreadyLiquidated);
 assert!(owner_account.id == safe.owner_id, Unauthorized);
 assert!(owner_account.is_authorized, Unauthorized);
@@ -302,17 +323,12 @@ assert!(owner_account.is_authorized, Unauthorized);
 
 **State Transition:**
 ```
-// Reduce collateral available for LSC redemption
-collateral_redemption.collateral_available -= debt_in_collateral
-// (debt_in_collateral's worth is "consumed" to cover this SAFE's debt)
-// (net_collateral goes back to owner, leaving less for LSC redemption)
-// Actually:
-// collateral_available_for_lsc = remaining vault - claimed by SAFE owners
-// Each SAFE redemption claims safe.collateral (which includes the debt portion and net portion)
-// The debt portion covers their LSC debt; the net goes to them
-// So: collateral_redemption.collateral_available -= safe.collateral
-
-collateral_redemption.collateral_available -= safe.collateral
+// Track how much collateral remains available for LSC redemption.
+// The SAFE owner takes net_collateral; the debt_in_collateral portion
+// is NOT transferred out of the vault (it stays for LSC holders).
+// Therefore we only subtract net_collateral from collateral_available,
+// keeping the debt-covering collateral inside for LSC redemption.
+collateral_redemption.collateral_available -= net_collateral
 safe.collateral = 0
 safe.normalized_debt = 0
 safe.liquidated = true  // closed
