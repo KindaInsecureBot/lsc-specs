@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-The LSC specifications are well-structured and architecturally sound. The RAI model has been thoughtfully adapted to LEZ's stateless account model, and most concepts are correctly translated. However, the audit found **9 critical issues** and **15 important issues** that would prevent correct implementation or introduce security vulnerabilities. The most severe issues relate to incorrect Token Program chained call account ordering (which will panic at runtime), a fundamental misunderstanding of how minting authority works in the Token Program, an absent TaxCollector program specification, and a settlement accounting bug.
+The LSC specifications are well-structured and architecturally sound. The RAI model has been thoughtfully adapted to LEZ's stateless account model, and most concepts are correctly translated. The audit found **9 critical issues** and **14 important issues**. The most severe issues relate to incorrect Token Program chained call account ordering (which will panic at runtime), a fundamental misunderstanding of how minting authority works in the Token Program, an absent TaxCollector program specification, and a settlement accounting bug.
 
 ---
 
@@ -40,15 +40,13 @@ The TaxCollector is a core program (responsible for accruing stability fees and 
 
 `SurplusAuctionHouse::Initialize` (07) takes parameters (`bid_increase`, `bid_duration`, `total_auction_length`), but there is no `SurplusAuctionHouseParamsAccount` schema in spec 02. This must exist — `IncreaseBidSize` references `auction.bid_duration` and `auction.bid_increase` which are per-auction copies, but `StartAuction` needs to read system-level defaults. A params account schema and PDA must be specified.
 
-> **Note:** The DebtAuctionHouse has been removed from the LSC system. The corresponding `DebtAuctionHouseParamsAccount` finding is no longer applicable.
-
 ### 1.6 SAFE_REDEMPTION_PERIOD Not Parameterized
 
 `GlobalSettlement::SetFinalRedemptionRate` (08) uses `SAFE_REDEMPTION_PERIOD` (hardcoded as "3 days = 259200 seconds" in comments) but this constant is never stored in any account. It should be a parameter in `GlobalSettlementStateAccount` or set at `Initialize` time. Spec 12 lists it as a tunable parameter, confirming it should be stored.
 
-### 1.7 AuctionSurplus/AuctionDebt Missing Required Accounts
+### 1.7 AuctionSurplus Missing Required Accounts
 
-`AccountingEngine::AuctionDebt` (07) computes `surplus_balance_rad` from the system surplus balance but `system_surplus_id` is not listed in the Required Accounts table for `AuctionDebt`. Similarly, `AuctionSurplus` and `AuctionDebt` need oracle accounts for timestamps but these are not uniformly listed.
+`AccountingEngine::AuctionSurplus` (07) needs `system_surplus_id` to compute `surplus_balance_rad`, and oracle accounts for timestamps, but these are not uniformly listed in the Required Accounts table.
 
 ---
 
@@ -377,19 +375,16 @@ The total LSC that can be redeemed = `collateral_available * WAD / collateral_pe
 - Change `RedeemCollateral` to: `collateral_redemption.collateral_available -= net_collateral` (track what stays for LSC), OR
 - Change `SetFinalRedemptionRate` to use `collateral_redemption.collateral_available` instead of `collateral_vault.balance`
 
-### 4.3 PushDebt Authorization Check References Wrong Field 🟡
+### 4.3 PushDebt Authorization Check (Resolved) 🟡
 
 **File:** 07-accounting-engine.md §1.3 PushDebt
 
+The spec has been updated. `AccountingEngineParamsAccount` now stores `liquidation_engine_params_id: [u8; 32]` (set at initialization). The `PushDebt` validation correctly checks:
 ```
-Validations:
-- `liquidation_engine_params_id.id == accounting_params.debt_auction_params_id`
-  (or: check against lsc_engine_params.liquidation_engine_params_id)
+liquidation_engine_params_id.id == accounting_params.liquidation_engine_params_id
 ```
 
-`accounting_params.debt_auction_params_id` refers to the **Debt Auction House** params, not the Liquidation Engine. The spec notes the ambiguity with an "(or:)" comment but leaves it unresolved. The `AccountingEngineParamsAccount` schema does not store a `liquidation_engine_params_id` field, so this check cannot be done.
-
-Either: (a) Add `liquidation_engine_params_id: [u8; 32]` to `AccountingEngineParamsAccount`, or (b) have `PushDebt` read from `lsc_engine_params_id.liquidation_engine_params_id`. Option (a) is simpler. The spec must be corrected.
+> **Note:** Prior versions of this spec referenced `accounting_params.debt_auction_params_id` (a stale reference to the since-removed DebtAuctionHouse). That reference has been removed from the spec and replaced with `liquidation_engine_params_id`.
 
 ### 4.4 GlobalSettlementError Has Duplicate Variant 🟡
 
@@ -459,11 +454,7 @@ The conditional is in a comment but the code shows an unconditional assignment. 
 
 Every chained call must specify what PDA seeds the calling program includes. Currently chained calls only show account lists. For example, `LSCEngine::DepositCollateral` chains to `TokenProgram::Transfer` with `collateral_vault_id` as authorized — but how? LSCEngine must include the PDA seed for `collateral_vault_id` in the `ChainedCall.pda_seeds` list. This seed must be specified.
 
-### 5.3 ~~DecreaseSoldAmount First-Bid Validation Uses Undefined Variable~~ (N/A — DebtAuction Removed)
-
-> **This finding is no longer applicable.** The DebtAuctionHouse has been removed from the LSC system. `DecreaseSoldAmount` and all DebtAuction instructions no longer exist. See the Bad Debt Resolution section of spec 07 for the current approach.
-
-### 5.4 OracleConfigAccount Missing `max_timestamp_jump` Field 🟡
+### 5.3 OracleConfigAccount Missing `max_timestamp_jump` Field 🟡
 
 **File:** 02-account-schemas.md §10.1, 04-oracle-system.md §1.4 SubmitPrice
 
@@ -480,19 +471,17 @@ struct OracleConfigAccount {
 }
 ```
 
-### 5.5 CollateralAuction StartAuction Missing collateral_type_id 🟡
+### 5.4 CollateralAuction StartAuction Missing collateral_type_id 🟡
 
 **File:** 06-liquidation-engine.md §3.3 StartAuction
 
 The state transition sets `new_auction.collateral_type_id = collateral_type_id // from liquidation context` but `collateral_type_id` is not in the `StartAuction` instruction parameters or required accounts for `CollateralAuctionHouse::StartAuction`. It is available in `LiquidateSafe`'s context but needs to be passed to `StartAuction` either as an instruction parameter or account.
 
-### 5.6 Auction Holding Accounts Not Initialized 🟡
+### 5.5 Auction Holding Accounts Not Initialized 🟡
 
 `SurplusAuction::IncreaseBidSize` transfers LOGOS to `auction_logos_holding_id` but this account is never initialized. `SurplusAuctionHouse::StartAuction` must include a `TokenProgram::InitializeAccount` chained call to create this LOGOS holding account before the auction accepts bids. Spec must specify when and how this is created.
 
-> **Note:** The corresponding DebtAuction finding (`auction_lsc_holding_id`) is no longer applicable — the DebtAuctionHouse has been removed.
-
-### 5.7 Edge Cases for Empty System Not Covered 🟢
+### 5.6 Edge Cases for Empty System Not Covered 🟢
 
 - `SettleDebt` when `debt_queue.entry_count == 0`: undefined behavior
 - `UpdateMedian` when all feeds are stale: the spec says "do not update price — keep last valid price" but how is `median_oracle.valid = false` while keeping the old price useful?
@@ -575,7 +564,7 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 **C-04: LSC Minting Authority Mechanism Fundamentally Wrong**
 - **Files:** 01-system-architecture.md §7, 09-token-integration.md §1.3
 - **Problem:** `TokenDefinition` has no `minting_authority` field. The only way for LSCEngine to authorize `TokenProgram::Mint` is if the LSC token definition account ID is a PDA of `LSC_ENGINE_ID`, enabling it to be passed as an authorized PDA in `ChainedCall.pda_seeds`. The spec never specifies this and references a non-existent `minting_authority` concept.
-- **Fix:** (1) Specify that the LSC token definition account is created as a PDA of `LSC_ENGINE_ID`. (2) Document the `pda_seeds` authorization mechanism. (3) Remove references to `minting_authority`. Note: the LSC system does not mint LOGOS — there is no DebtAuctionHouse.
+- **Fix:** (1) Specify that the LSC token definition account is created as a PDA of `LSC_ENGINE_ID`. (2) Document the `pda_seeds` authorization mechanism. (3) Remove references to `minting_authority`. Note: the LSC system does not mint LOGOS.
 
 ---
 
@@ -625,10 +614,9 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 
 ---
 
-**I-02: PushDebt Authorization Check References Wrong Field**
+**I-02: PushDebt Authorization Check (Resolved)**
 - **File:** 07-accounting-engine.md §1.3
-- **Problem:** `liquidation_engine_params_id.id == accounting_params.debt_auction_params_id` is always false (they're different programs). `AccountingEngineParamsAccount` has no `liquidation_engine_params_id` field.
-- **Fix:** Add `liquidation_engine_params_id: [u8; 32]` to `AccountingEngineParamsAccount` (set in `Initialize`). Validate against this field in `PushDebt`.
+- **Status:** ✅ Fixed. `AccountingEngineParamsAccount` now includes `liquidation_engine_params_id: [u8; 32]`. The `PushDebt` validation checks against this field. The stale `debt_auction_params_id` reference (from the removed DebtAuctionHouse) has been eliminated.
 
 ---
 
@@ -653,20 +641,14 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 
 ---
 
-**I-06: ~~DecreaseSoldAmount First-Bid Validation References Undefined Variable~~ (N/A — DebtAuction Removed)**
-- **Status:** Not applicable. The DebtAuctionHouse and `DecreaseSoldAmount` instruction have been removed from the LSC system.
-
----
-
-**I-07: SurplusAuctionHouseParamsAccount Missing**
+**I-06: SurplusAuctionHouseParamsAccount Missing**
 - **File:** 02-account-schemas.md
 - **Problem:** No account schema for the SurplusAuctionHouse system params.
 - **Fix:** Add `SurplusAuctionHouseParamsAccount` schema with its PDA (`SURPLUS_AUCTION_ID.derive(b"surplus_auction_params")`) containing `bid_increase`, `bid_duration`, `total_auction_length` fields.
-- **Note:** The `DebtAuctionHouseParamsAccount` finding is no longer applicable — the DebtAuctionHouse has been removed.
 
 ---
 
-**I-08: OracleConfigAccount Missing max_timestamp_jump Field**
+**I-07: OracleConfigAccount Missing max_timestamp_jump Field**
 - **File:** 02-account-schemas.md §10.1, 04-oracle-system.md §1.4
 - **Problem:** `max_timestamp_jump` is a governance parameter (spec 12) but absent from `OracleConfigAccount`.
 - **Fix:** Add `pub max_timestamp_jump: u64` to `OracleConfigAccount`. Use in `SubmitPrice` validation. Add `new_max_timestamp_jump: Option<u64>` to `UpdateParams`.
@@ -767,7 +749,7 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 | C-08 | GlobalSettlement FreezeCollateralType missing chained call | 🔴 CRITICAL | 08 |
 | C-09 | Settlement accounting bug (vault.balance vs collateral_available) | 🔴 CRITICAL | 08 |
 | I-01 | PI Controller arithmetic overflows i128 | 🟡 IMPORTANT | 05 |
-| I-02 | PushDebt authorization check references wrong field | 🟡 IMPORTANT | 07 |
+| I-02 | ~~PushDebt authorization check references wrong field~~ (Resolved — field updated) | ~~🟡 IMPORTANT~~ | 07 |
 | I-03 | GlobalDebtAccount.total_debt not updated in UpdateAccumulatedRate | 🟡 IMPORTANT | 03 |
 | I-04 | safe_nonce and vault_nonce fields dead/unused | 🟡 IMPORTANT | 02, 03 |
 | I-05 | RestartAuction discount_increment undefined | 🟡 IMPORTANT | 06 |

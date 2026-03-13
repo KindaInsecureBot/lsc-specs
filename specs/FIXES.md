@@ -448,27 +448,11 @@ global_debt.total_debt += surplus_lsc_rad;  // Rad += Rad
 
 The required accounts for `UpdateAccumulatedRate` must include `global_debt_id (writable)`.
 
-### Fix 7.2 — PushDebt: Correct Authorization Check [IMPORTANT — Audit §4.1, §7 I13]
+### Fix 7.2 — PushDebt: Correct Authorization Check ✅ RESOLVED
 
-**Problem:** `AccountingEngine::PushDebt` validates:
-```
-assert!(caller == accounting_engine_params.debt_auction_params_id, ...)
-```
-This is wrong: `PushDebt` is called by `LiquidationEngine`, not `DebtAuctionHouse`. The check should verify the caller is `LIQUIDATION_ENGINE_ID`.
+**Status:** The spec has been updated. `AccountingEngineParamsAccount` now stores `liquidation_engine_params_id: [u8; 32]`. `PushDebt` validation correctly uses this field.
 
-**Change:**
-```
-// Before (WRONG):
-assert!(caller_account.id == accounting_engine_params.debt_auction_params_id,
-    "Only DebtAuctionHouse can push debt");
-
-// After (CORRECT):
-assert!(caller_account.id == accounting_engine_params.liquidation_engine_params_id,
-    "Only LiquidationEngine can push debt");
-// OR check that the caller account is owned by LIQUIDATION_ENGINE_ID
-```
-
-Also ensure `accounting_engine_params.liquidation_engine_params_id` is set at initialization (it should store the LiquidationEngine params PDA or program ID for the check).
+> **Historical note:** An earlier draft of the spec referenced `accounting_engine_params.debt_auction_params_id` (a stale field from the removed DebtAuctionHouse). The field has been replaced with `liquidation_engine_params_id` and the authorization check correctly validates the calling LiquidationEngine.
 
 ### Fix 7.3 — ~~DecreaseSoldAmount: Replace initial_mint_amount Reference~~ (N/A — DebtAuction Removed)
 
@@ -702,12 +686,12 @@ ChainedCall → LSCEngine::UpdateAccumulatedRate {
 | File | Critical Fixes | Important Fixes |
 |---|---|---|
 | 01-system-architecture.md | PDA format (C4), LSC token def as PDA (C3) | ChainedCall pda_seeds doc |
-| 02-account-schemas.md | — | Vault owner, spurious integral_period_size, max_timestamp_jump, surplus/debt auction params, safe_redemption_period |
+| 02-account-schemas.md | — | Vault owner, spurious integral_period_size, max_timestamp_jump, surplus auction params (debt auction N/A), safe_redemption_period |
 | 03-core-engine.md | Burn order (C1), InitializeAccount (C2), RepayDebt unit error (C6), GenerateDebt pda_seeds (C3) | UpdateAccumulatedRate parameter |
 | 04-oracle-system.md | — | max_timestamp_jump from config |
 | 05-pi-controller.md | i128 overflow (C7) | Kp sign convention, settlement check |
 | 06-liquidation-engine.md | — | Chained call count, discount_increment, StartAuction params |
-| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth, SurplusAuction holding account init (DebtAuction parts N/A) |
+| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth (✅ resolved), SurplusAuction holding account init (DebtAuction parts N/A) |
 | 08-global-settlement.md | FreezeCollateralType cross-program (C9), settlement accounting (C8) | Duplicate error code |
 | 09-token-integration.md | InitializeAccount order (C2), Burn order (C1) | — |
 | NEW: 03b-tax-collector.md | TaxCollector specification (C5) | — |
