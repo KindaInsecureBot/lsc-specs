@@ -191,9 +191,6 @@ Start with tight bounds; widen after observing system behavior.
 |---|---|---|---|---|---|
 | `surplus_auction_amount` | `u128` (Rad) | LSC sold per surplus auction | `10_000 * RAY * WAD` (10k LSC) | `[1_000 * RAY * WAD, 1_000_000 * RAY * WAD]` | Governance |
 | `surplus_buffer` | `u128` (Rad) | Surplus buffer kept before auctioning | `500_000 * RAY * WAD` (500k LSC) | `[0, ∞]` | Governance |
-| `debt_auction_lot_size` | `u128` (Rad) | Debt covered per debt auction | `50_000 * RAY * WAD` (50k LSC) | `[1_000 * RAY * WAD, ∞]` | Governance |
-| `initial_debt_auction_mint_amount` | `u128` (Wad) | Initial LOGOS offered per debt auction | `5_000 * WAD` (5000 LOGOS) | `[1 * WAD, ∞]` | Governance |
-| `max_debt_auction_size` | `u128` (Rad) | Max debt per single auction | `1_000_000 * RAY * WAD` (1M LSC) | `[debt_auction_lot_size, ∞]` | Governance |
 | `surplus_auction_delay` | `u64` (seconds) | Min time between surplus auctions | `86400` (1 day) | `[3600, 2592000]` (1 hour – 30 days) | Governance |
 
 ---
@@ -208,18 +205,7 @@ Start with tight bounds; widen after observing system behavior.
 
 ---
 
-## 11. Debt Auction House Parameters
-
-| Parameter | Type | Description | Initial Value | Range | Who Can Modify |
-|---|---|---|---|---|---|
-| `bid_decrease` | `u128` (Wad) | Minimum LOGOS reduction per bid | `50_000_000_000_000_000` (5%) | `[10_000_000_000_000_000, 300_000_000_000_000_000]` (1% – 30%) | Governance |
-| `bid_duration` | `u64` (seconds) | Extension window after each bid | `10800` (3 hours) | `[600, 86400]` | Governance |
-| `total_auction_length` | `u64` (seconds) | Hard deadline | `259200` (3 days) | `[3600, 604800]` | Governance |
-| `restart_multiplier` | `u128` (Wad) | LOGOS increase per restart | `50_000_000_000_000_000` (5%) | `[10_000_000_000_000_000, 200_000_000_000_000_000]` | Governance |
-
----
-
-## 12. Global Settlement Parameters
+## 11. Global Settlement Parameters
 
 | Parameter | Type | Description | Initial Value | Range | Who Can Modify |
 |---|---|---|---|---|---|
@@ -227,7 +213,7 @@ Start with tight bounds; widen after observing system behavior.
 
 ---
 
-## 13. Constants (Not Tunable)
+## 12. Constants (Not Tunable)
 
 These are hardcoded constants that cannot be changed without a program upgrade:
 
@@ -245,7 +231,7 @@ These are hardcoded constants that cannot be changed without a program upgrade:
 
 ---
 
-## 14. Parameter Dependencies and Constraints
+## 13. Parameter Dependencies and Constraints
 
 The following constraints must hold between parameters at all times. Governance must verify these after any parameter update:
 
@@ -270,13 +256,11 @@ auction_discount >= min_discount
 max_discount >= auction_discount
 
 surplus_auction_amount <= surplus_buffer + surplus_auction_amount  (buffer meaningful)
-
-debt_auction_lot_size <= max_debt_auction_size
 ```
 
 ---
 
-## 15. Recommended Parameter Review Schedule
+## 14. Recommended Parameter Review Schedule
 
 | Frequency | Review |
 |---|---|
