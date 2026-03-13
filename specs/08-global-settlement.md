@@ -460,9 +460,9 @@ When settlement is triggered:
 
 Governance must decide which to do based on whether the existing auction prices are fair.
 
-### 5.3 Active Debt Auctions at Settlement
+### 5.3 Bad Debt at Settlement
 
-Debt auctions should be terminated (governance calls `DebtAuctionHouse::TerminateAuction`), refunding the latest bidder. Bad debt is absorbed by the settlement process.
+There are no debt auctions to terminate. Any queued bad debt in the `SystemDebtQueueAccount` at settlement time is absorbed by the settlement process — it reduces the collateral available to LSC holders proportionally. LSC holders may receive less than redemption price per token if bad debt exceeds surplus at the time of settlement (see §5.1).
 
 ### 5.4 Multiple Collateral Types
 
