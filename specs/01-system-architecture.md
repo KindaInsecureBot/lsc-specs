@@ -2,7 +2,7 @@
 
 ## 1. Programs Overview
 
-LSC is composed of **11 programs**. Each is stateless — all state lives in accounts passed as inputs. Programs communicate via chained calls (tail calls) to the Token Program and AMM Program.
+LSC is composed of **10 programs**. Each is stateless — all state lives in accounts passed as inputs. Programs communicate via chained calls (tail calls) to the Token Program and AMM Program.
 
 | Program ID Alias | Binary Name | Responsibility |
 |---|---|---|
@@ -12,9 +12,8 @@ LSC is composed of **11 programs**. Each is stateless — all state lives in acc
 | `PI_CONTROLLER_ID` | `pi_controller` | Feedback rate computation |
 | `LIQUIDATION_ENGINE_ID` | `liquidation_engine` | Undercollateralization detection + liquidation |
 | `COLLATERAL_AUCTION_ID` | `collateral_auction_house` | Sell collateral for LSC |
-| `ACCOUNTING_ENGINE_ID` | `accounting_engine` | Surplus/debt routing |
+| `ACCOUNTING_ENGINE_ID` | `accounting_engine` | Surplus routing; bad debt queuing and offsetting |
 | `SURPLUS_AUCTION_ID` | `surplus_auction_house` | Surplus LSC auctions |
-| `DEBT_AUCTION_ID` | `debt_auction_house` | Bad debt auctions |
 | `ORACLE_PROGRAM_ID` | `oracle_program` | External price feed aggregation |
 | `GLOBAL_SETTLEMENT_ID` | `global_settlement` | Emergency shutdown |
 
@@ -61,9 +60,6 @@ ACCOUNTING_ENGINE_ID owns:
 
 SURPLUS_AUCTION_ID owns:
   └── SurplusAuctionAccount (PDA: ["surplus_auction", auction_id])
-
-DEBT_AUCTION_ID owns:
-  └── DebtAuctionAccount (PDA: ["debt_auction", auction_id])
 
 ORACLE_PROGRAM_ID owns:
   ├── OracleFeedAccount (PDA: ["feed", feed_id])     -- one per price source
@@ -141,12 +137,6 @@ debt_queue_id           = ACCOUNTING_ENGINE_ID.derive(b"debt_queue")
 
 ```
 surplus_auction_id      = SURPLUS_AUCTION_ID.derive(b"surplus_auction" || auction_nonce[0..8])
-```
-
-### Debt Auction PDAs
-
-```
-debt_auction_id         = DEBT_AUCTION_ID.derive(b"debt_auction" || auction_nonce[0..8])
 ```
 
 ### Oracle Program PDAs
@@ -284,7 +274,7 @@ LscTokenDefinitionAccount:
 
 The LSC Engine's `system_params_id` PDA is the authorized minting authority. Only LSCEngine can invoke `TokenProgram::Mint` for LSC (because the LSC token definition's `is_authorized` flag is set only when the calling chain includes LSCEngine as the minting authority).
 
-LOGOS is a **pre-existing token** with its own token definition. The Debt Auction House needs minting authority over LOGOS — this is granted by LOGOS governance at deployment time.
+LOGOS is a **pre-existing token** with its own token definition. No LSC program holds minting authority over LOGOS — the LSC system does not mint new LOGOS under any circumstances.
 
 ---
 
@@ -309,9 +299,8 @@ Deployment must happen in this order:
 12. CollateralAuctionHouse::Initialize(params) → creates CollateralAuctionHouseParamsAccount
 13. AccountingEngine::Initialize(params) → creates AccountingEngineParamsAccount, SystemSurplusAccount, SystemDebtQueueAccount
 14. SurplusAuctionHouse::Initialize(params) → creates (no state; auctions created on demand)
-15. DebtAuctionHouse::Initialize(params) → creates (no state; auctions created on demand)
-16. GlobalSettlement::Initialize → creates GlobalSettlementStateAccount (active = false)
-17. AMM_PROGRAM::NewDefinition → creates LOGOS/LSC pool
+15. GlobalSettlement::Initialize → creates GlobalSettlementStateAccount (active = false)
+16. AMM_PROGRAM::NewDefinition → creates LOGOS/LSC pool
 ```
 
 ---
