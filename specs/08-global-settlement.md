@@ -505,7 +505,7 @@ enum GlobalSettlementError {
     ZeroAmount                  = 6011,
     AlreadyLiquidated           = 6012,
     InvalidPDA                  = 6013,
-    Unauthorized                = 6014,
+    CollateralTypeNotFrozen     = 6014,
     SafeRedemptionPeriodActive  = 6015,
 }
 ```
