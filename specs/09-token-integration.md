@@ -111,7 +111,6 @@ This is a **two-deep chained call chain.** LEZ supports up to 10 chained calls p
 |---|---|---|---|---|
 | Burn (LSC) | `SettleDebt` | System surplus PDA | (lsc_token_def_id) | `lsc_to_burn` |
 | Burn (LOGOS) | `SurplusAuction::SettleAuction` | Auction LOGOS holding | (logos_token_def_id) | `bid_amount` |
-| Mint (LOGOS) | `DebtAuction::SettleAuction` | (logos_token_def_id auth) | Winner LOGOS holding | `amount_to_mint` |
 | Transfer | Various auctions | Holding PDAs | Participants | Various |
 
 ---

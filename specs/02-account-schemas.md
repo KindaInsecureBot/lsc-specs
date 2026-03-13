@@ -553,6 +553,9 @@ struct AccountingEngineParamsAccount {
     /// LSC Engine params account ID
     pub lsc_engine_params_id: [u8; 32],
 
+    /// Liquidation Engine params account ID (authorized to call PushDebt)
+    pub liquidation_engine_params_id: [u8; 32],
+
     /// Surplus threshold: start surplus auction when surplus > this
     /// Unit: Rad
     pub surplus_auction_amount: u128,

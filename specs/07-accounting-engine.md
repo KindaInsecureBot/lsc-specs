@@ -26,6 +26,7 @@ enum AccountingEngineInstruction {
     Initialize {
         surplus_auction_params_id: [u8; 32],
         lsc_engine_params_id: [u8; 32],
+        liquidation_engine_params_id: [u8; 32],
         lsc_token_def_id: [u8; 32],
         surplus_auction_amount: u128,           // Rad (surplus sold per auction)
         surplus_buffer: u128,                   // Rad (buffer kept before auctioning)
@@ -109,8 +110,8 @@ TokenProgram::InitializeAccount {
 
 **Validations:**
 - `liquidation_engine_params_id.is_authorized == true`
-- `liquidation_engine_params_id.id == accounting_params.debt_auction_params_id`
-  (or: check against lsc_engine_params.liquidation_engine_params_id)
+- `liquidation_engine_params_id.id == accounting_params.liquidation_engine_params_id`
+  (the AccountingEngineParamsAccount stores the registered liquidation engine ID)
 
 **State Transition:**
 ```
