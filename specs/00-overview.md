@@ -22,6 +22,7 @@ LSC is architecturally derived from [RAI / Reflexer Finance](https://reflexer.fi
 | **Liquidation** | Forced closure of an undercollateralized SAFE. Collateral is sold via fixed-discount auction to cover debt + penalty. |
 | **Surplus** | Protocol-owned LSC accumulated from stability fees. Auctioned off for LOGOS which is then burned. |
 | **Bad Debt** | Uncovered LSC debt after a failed liquidation. Queued in the AccountingEngine and offset against future surplus. If unresolved, it remains as a protocol liability socialized across LSC holders via the redemption price mechanism. |
+| **Recapitalization** | Governance-authorized injection of external capital to cancel bad debt. `RecapitalizeWithLSC` deposits LSC directly; `RecapitalizeWithLOGOS` deposits LOGOS which is sold for LSC on the AMM. Neither instruction mints new LOGOS. |
 | **Global Settlement** | An emergency shutdown mechanism that freezes the system and allows all SAFE owners to redeem collateral. |
 | **PDA** | Program-Derived Account — an account whose ID is deterministically derived from a program's seed space. |
 | **Ray** | Fixed-point number with 27 decimal places (10^27 = 1.0). Used for rates and price accumulators. |
@@ -152,7 +153,12 @@ The key innovation — the **PI controller** — is directly ported from RAI's m
 6b. If bad debt remains after offsetting against surplus:
    → Bad debt persists as a protocol liability in the debt queue
    → Socialized across LSC holders via the redemption price mechanism
-   → Governance may decide on external recapitalization (out of scope for v1)
+
+6c. Governance recapitalization (if bad debt is significant):
+   → AccountingEngine::RecapitalizeWithLSC (deposit LSC from treasury)
+        → LSC transferred to system; debt queue reduced directly
+   → AccountingEngine::RecapitalizeWithLOGOS (sell LOGOS from treasury)
+        → AMM::Swap(LOGOS → LSC); acquired LSC cancels debt queue
 ```
 
 ---
@@ -176,6 +182,7 @@ The key innovation — the **PI controller** — is directly ported from RAI's m
 | `Ki` | PI controller integral gain. |
 | `global_debt` | Total LSC debt outstanding across all SAFEs (wad). |
 | `global_surplus` | Total LSC surplus held by AccountingEngine (wad). |
+| `recapitalization` | External capital injection by governance to cancel bad debt without minting LOGOS. |
 | `ray` | 10^27 fixed-point unit. |
 | `wad` | 10^18 fixed-point unit. |
 | `rad` | 10^45 fixed-point unit (ray * wad, used for debt accounting). |

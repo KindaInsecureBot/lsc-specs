@@ -313,5 +313,6 @@ In v1, governance is a multisig account (`governance_id`). Governance can:
 - Trigger global settlement
 - Upgrade program binaries (LEZ native mechanism)
 - Grant/revoke oracle keeper authorizations
+- Recapitalize the system via `AccountingEngine::RecapitalizeWithLSC` (inject LSC) or `AccountingEngine::RecapitalizeWithLOGOS` (sell LOGOS for LSC on AMM) to cancel bad debt
 
 Parameter changes take effect immediately (no timelock in v1; timelock recommended for v2).

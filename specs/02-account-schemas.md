@@ -590,7 +590,24 @@ This is a **Token Program holding account** (TokenHolding, Fungible) that holds 
 /// The AccountingEngine authorizes transfers from this account via its PDA.
 ```
 
-### 7.3 SystemDebtQueueAccount
+### 7.3 SystemLogosHoldingAccount
+
+**PDA:** `ACCOUNTING_ENGINE_ID.derive(b"system_logos_holding")`
+**Owner:** `ACCOUNTING_ENGINE_ID`
+
+This is a **Token Program holding account** (TokenHolding, Fungible) that temporarily stages LOGOS during `RecapitalizeWithLOGOS`. The AccountingEngine authorizes transfers from it by including its PDA seed in `ChainedCall.pda_seeds`.
+
+```rust
+/// TokenHolding { Fungible { definition_id: LOGOS_TOKEN_DEF_ID, balance: u128 } }
+/// Holder authority = ACCOUNTING_ENGINE_ID PDA
+/// Must be initialized (via TokenProgram::InitializeAccount) before
+/// RecapitalizeWithLOGOS can be called. Typically initialized alongside
+/// AccountingEngine::Initialize as an optional chained call.
+```
+
+---
+
+### 7.4 SystemDebtQueueAccount
 
 **PDA:** `ACCOUNTING_ENGINE_ID.derive(b"debt_queue")`
 **Owner:** `ACCOUNTING_ENGINE_ID`
@@ -867,6 +884,7 @@ struct CollateralRedemptionAccount {
 | CollateralAuctionHouseParamsAccount | ~256 |
 | CollateralAuctionAccount | ~192 |
 | AccountingEngineParamsAccount | ~192 |
+| SystemLogosHoldingAccount | ~64 |
 | SystemDebtQueueAccount | ~4112 |
 | SurplusAuctionAccount | ~192 |
 | OracleConfigAccount | ~128 |
