@@ -52,6 +52,17 @@ enum AccountingEngineInstruction {
         new_surplus_buffer: Option<u128>,
         new_surplus_auction_delay: Option<u64>,
     },
+
+    /// Governance injects LSC directly to cancel bad debt (no LOGOS minting)
+    RecapitalizeWithLSC {
+        amount: u128,   // Wad (LSC to inject)
+    },
+
+    /// Governance injects LOGOS which is sold for LSC via AMM to cancel bad debt
+    RecapitalizeWithLOGOS {
+        logos_amount: u128,     // Wad (LOGOS to sell)
+        min_lsc_out: u128,      // Wad (minimum LSC to receive; slippage protection)
+    },
 }
 ```
 
@@ -244,6 +255,167 @@ SurplusAuctionHouse::StartAuction {
 **Errors:**
 - `SurplusNotSufficient` — net surplus below threshold
 - `TooSoon` — delay not elapsed
+
+---
+
+### 1.6 `RecapitalizeWithLSC`
+
+**Description:** Governance injects LSC directly into the system to cancel queued bad debt. The caller provides LSC tokens from their own holding account. No LOGOS is minted. If the deposited amount exceeds the queued bad debt, the remainder is added to the system surplus.
+
+**Authorization:** Governance only.
+
+**Required Accounts:**
+
+| # | Account | Writable | Auth | Description |
+|---|---|---|---|---|
+| 0 | `accounting_params_id` | No | — | For governance check |
+| 1 | `debt_queue_id` | Yes | — | Debt queue to reduce |
+| 2 | `system_surplus_id` | Yes | PDA (AccountingEngine) | LSC surplus holding |
+| 3 | `governance_lsc_holding_id` | Yes | Yes | Caller's LSC (source of injection) |
+| 4 | `governance_account` | No | Yes | Must match accounting_params.governance_id |
+| 5 | `lsc_engine_params_id` | No | — | For governance_id lookup |
+| 6 | `lsc_token_def_id` | No | — | LSC token definition |
+
+**Validations:**
+```
+assert!(governance_account.id == lsc_engine_params.governance_id, Unauthorized);
+assert!(governance_account.is_authorized == true, Unauthorized);
+assert!(amount > 0, ZeroAmount);
+assert!(governance_lsc_holding.balance >= amount, InsufficientLSC);
+```
+
+**Computation:**
+```
+amount_rad = amount * RAY  // Wad → Rad
+
+// How much cancels debt vs goes to surplus
+let debt_to_cancel = min(amount_rad, debt_queue.queued_debt);  // Rad
+let surplus_addition = amount_rad - debt_to_cancel;            // Rad
+```
+
+**State Transition:**
+```
+// Cancel as much queued debt as possible (FIFO)
+if debt_to_cancel > 0:
+    debt_queue.queued_debt -= debt_to_cancel
+    // Remove entries from front of queue
+    remaining = debt_to_cancel
+    while remaining > 0 && entry_count > 0:
+        if debt_queue.entries[0].debt <= remaining:
+            remaining -= debt_queue.entries[0].debt
+            shift entries left
+            entry_count -= 1
+        else:
+            debt_queue.entries[0].debt -= remaining
+            remaining = 0
+
+// Any excess goes to system surplus (transferred in chained call below)
+```
+
+**Chained Calls:**
+```
+// Transfer LSC from governance into system_surplus
+TokenProgram::Transfer {
+    amount_to_transfer: amount,  // Wad
+    // accounts: [governance_lsc_holding_id (auth), system_surplus_id]
+}
+```
+
+**Errors:**
+- `Unauthorized` — caller is not governance
+- `ZeroAmount` — amount is 0
+- `InsufficientLSC` — caller does not have enough LSC
+
+---
+
+### 1.7 `RecapitalizeWithLOGOS`
+
+**Description:** Governance injects LOGOS which is immediately sold for LSC on the AMM. The acquired LSC is used to cancel queued bad debt. No LOGOS is minted by this instruction — the caller provides existing LOGOS tokens. If the acquired LSC exceeds the queued bad debt, the remainder goes to the system surplus.
+
+**Authorization:** Governance only.
+
+**Required Accounts:**
+
+| # | Account | Writable | Auth | Description |
+|---|---|---|---|---|
+| 0 | `accounting_params_id` | No | — | For governance check |
+| 1 | `debt_queue_id` | Yes | — | Debt queue to reduce |
+| 2 | `system_surplus_id` | Yes | PDA (AccountingEngine) | Receives acquired LSC |
+| 3 | `governance_logos_holding_id` | Yes | Yes | Caller's LOGOS (sold) |
+| 4 | `governance_account` | No | Yes | Must match accounting_params.governance_id |
+| 5 | `lsc_engine_params_id` | No | — | For governance_id lookup |
+| 6 | `amm_pool_def_id` | No | — | LSC/LOGOS AMM pool definition |
+| 7 | `amm_vault_logos_id` | Yes | — | AMM's LOGOS vault (receives LOGOS) |
+| 8 | `amm_vault_lsc_id` | Yes | — | AMM's LSC vault (sends LSC) |
+| 9 | `lsc_token_def_id` | No | — | LSC token definition |
+| 10 | `logos_token_def_id` | No | — | LOGOS token definition |
+
+**Validations:**
+```
+assert!(governance_account.id == lsc_engine_params.governance_id, Unauthorized);
+assert!(governance_account.is_authorized == true, Unauthorized);
+assert!(logos_amount > 0, ZeroAmount);
+assert!(min_lsc_out > 0, ZeroAmount);
+assert!(governance_logos_holding.balance >= logos_amount, InsufficientLOGOS);
+```
+
+**Computation:**
+
+The LSC acquired from the AMM swap (`lsc_acquired`) is determined by the AMM's constant-product formula and is validated against `min_lsc_out` (slippage protection) by the AMM program itself. After the swap:
+
+```
+lsc_acquired_rad = lsc_acquired * RAY  // Wad → Rad
+
+let debt_to_cancel = min(lsc_acquired_rad, debt_queue.queued_debt);
+let surplus_addition = lsc_acquired_rad - debt_to_cancel;
+```
+
+**State Transition:**
+```
+// Cancel queued debt with acquired LSC (same FIFO logic as RecapitalizeWithLSC)
+if debt_to_cancel > 0:
+    debt_queue.queued_debt -= debt_to_cancel
+    // Remove entries FIFO (same algorithm as SettleDebt / RecapitalizeWithLSC)
+
+// Surplus addition: lsc goes to system_surplus via the AMM swap output
+// (the AMM sends lsc_acquired directly to system_surplus_id as the swap recipient)
+```
+
+**Chained Calls:**
+
+This instruction uses two chained calls (total: 2, within LEZ limit of 10):
+
+```
+// 1. Swap LOGOS for LSC on AMM — output goes directly to system_surplus_id
+AMM::Swap {
+    swap_amount_in: logos_amount,        // Wad (LOGOS in)
+    min_amount_out: min_lsc_out,         // Wad (LSC out, slippage guard)
+    token_definition_id_in: logos_token_def_id,
+    // accounts: [
+    //   governance_logos_holding_id (auth — caller's LOGOS),
+    //   amm_vault_logos_id (writable),
+    //   amm_vault_lsc_id (writable),
+    //   system_surplus_id (writable — receives LSC output),
+    //   amm_pool_def_id,
+    // ]
+}
+
+// Note: The AMM swap sends LSC directly to system_surplus_id.
+// The debt queue reduction happens in this instruction's state transition
+// based on the lsc_acquired amount (computed from AMM pool state pre-swap).
+// Because LEZ executes atomically, the post-swap surplus balance reflects
+// lsc_acquired correctly.
+```
+
+**Note on chained call count:** `RecapitalizeWithLOGOS` issues 1 chained call (`AMM::Swap`). The AMM internally chains to `TokenProgram::Transfer` (2 calls), for a total depth of 3 nested calls — well within the LEZ limit of 10.
+
+**Slippage:** The `min_lsc_out` parameter provides slippage protection. If the AMM cannot provide at least `min_lsc_out` LSC for `logos_amount` LOGOS (due to price movement or pool imbalance), the AMM will revert the entire transaction. Governance must set a reasonable `min_lsc_out` based on current pool prices.
+
+**Errors:**
+- `Unauthorized` — caller is not governance
+- `ZeroAmount` — logos_amount or min_lsc_out is 0
+- `InsufficientLOGOS` — caller does not have enough LOGOS
+- AMM errors propagate: `SlippageExceeded` if `lsc_out < min_lsc_out`
 
 ---
 
@@ -457,9 +629,17 @@ SystemDebtQueueAccount
      │
      ├── AccountingEngine::SettleDebt (offset against surplus)
      │
+     ├── AccountingEngine::RecapitalizeWithLSC (governance injects LSC)
+     │        → LSC transferred from governance to system_surplus
+     │        → debt queue reduced directly
+     │
+     ├── AccountingEngine::RecapitalizeWithLOGOS (governance sells LOGOS)
+     │        → LOGOS swapped for LSC on AMM
+     │        → acquired LSC deposited to system_surplus
+     │        → debt queue reduced directly
+     │
      └── If surplus insufficient: debt remains as protocol liability
               → socialized via redemption price mechanism
-              → governance may recapitalize externally (out of scope v1)
 ```
 
 ### Bad Debt Resolution Philosophy
@@ -467,9 +647,9 @@ SystemDebtQueueAccount
 The LSC system does not mint new LOGOS to cover bad debt. Instead:
 
 1. **Surplus offsets debt first** (`SettleDebt`): any stability fee surplus is used to cancel queued bad debt before triggering a surplus auction. Net surplus is what remains after this offset.
-2. **Unresolved debt is a protocol liability**: if `queued_debt > surplus_balance`, the difference represents LSC in circulation that is not fully backed by collateral. This is reflected in the system's backing ratio.
-3. **PI controller adjusts**: the redemption rate mechanism implicitly accounts for reduced backing — a weaker-backed LSC will tend to trade below redemption price, causing the PI controller to raise the redemption rate, incentivizing SAFEs to be closed (reducing LSC supply) until balance is restored.
-4. **Governance recapitalization**: in extreme scenarios, governance may arrange external capital injection (e.g., treasury purchase of collateral). This is outside the scope of v1 specs.
+2. **Governance recapitalization** (`RecapitalizeWithLSC`, `RecapitalizeWithLOGOS`): governance may inject external capital to cancel bad debt directly. This does not involve minting new LOGOS. `RecapitalizeWithLSC` injects LSC directly; `RecapitalizeWithLOGOS` sells existing LOGOS treasury holdings for LSC via the AMM.
+3. **Unresolved debt is a protocol liability**: if `queued_debt > surplus_balance` and governance does not recapitalize, the difference represents LSC in circulation that is not fully backed by collateral. This is reflected in the system's backing ratio.
+4. **PI controller adjusts**: the redemption rate mechanism implicitly accounts for reduced backing — a weaker-backed LSC will tend to trade below redemption price, causing the PI controller to raise the redemption rate, incentivizing SAFEs to be closed (reducing LSC supply) until balance is restored.
 
 ---
 
@@ -485,6 +665,9 @@ enum AccountingEngineError {
     TooSoon                   = 5006,
     InsufficientSurplus       = 5007,
     InvalidPDA                = 5008,
+    ZeroAmount                = 5009,
+    InsufficientLSC           = 5010,
+    InsufficientLOGOS         = 5011,
 }
 
 enum SurplusAuctionError {
