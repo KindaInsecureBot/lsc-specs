@@ -38,6 +38,7 @@ enum OracleInstruction {
     Initialize {
         governance_id: [u8; 32],
         max_feed_age: u64,
+        max_timestamp_jump: u64,  // seconds; initial value 7200; range [300, 86400]
         min_feeds_for_median: u8,
     },
 
@@ -80,6 +81,7 @@ enum OracleInstruction {
     /// Update system parameters (governance)
     UpdateParams {
         new_max_feed_age: Option<u64>,
+        new_max_timestamp_jump: Option<u64>,  // range [300, 86400]
         new_min_feeds_for_median: Option<u8>,
     },
 }
@@ -101,6 +103,7 @@ enum OracleInstruction {
 oracle_config.account_type = 90
 oracle_config.governance_id = governance_account.id
 oracle_config.max_feed_age = max_feed_age
+oracle_config.max_timestamp_jump = max_timestamp_jump
 oracle_config.min_feeds_for_median = min_feeds_for_median
 oracle_config.feed_count = 0
 ```
@@ -152,13 +155,16 @@ oracle_config.feed_count += 1
 |---|---|---|---|---|
 | 0 | `oracle_feed_id` | Yes | — | Feed to update |
 | 1 | `keeper_account` | No | Yes | Must match oracle_feed.keeper_id |
+| 2 | `oracle_config_id` | No | — | For max_timestamp_jump |
 
 **Validations:**
 - `keeper_account.id == oracle_feed.keeper_id`
 - `keeper_account.is_authorized == true`
 - `oracle_feed.active == true`
 - `timestamp > oracle_feed.timestamp` (monotonically increasing timestamps only)
-- `timestamp <= oracle_feed.timestamp + 7200` (max 2-hour jumps per update, prevents fake future timestamps)
+- `timestamp <= oracle_feed.timestamp + oracle_config.max_timestamp_jump`
+  (prevents keepers from submitting timestamps far in the future;
+   `oracle_config.max_timestamp_jump` is a governance-tunable parameter, initial value 7200)
 - `price > 0`
 - `confidence < price` (sanity check: uncertainty < price)
 

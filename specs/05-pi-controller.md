@@ -101,26 +101,27 @@ This prevents unnecessary thrashing when the market is already close to the rede
 **Setup:**
 - `p_r = 3.14 * RAY` (redemption price = $3.14)
 - `p_m = 3.00 * WAD` (market price = $3.00)
-- `Kp = -5_000_000_000_000_000_000_000_000` (= -5e24, negative gain in Ray)
-  - Note: In RAI's convention, Kp is negative because a positive error should *increase* the rate.
-  - We use: `raw_rate += Kp * e(t)` where `e(t) = (p_r - p_m) / p_r > 0`
-  - Since `Kp < 0` in this example convention, and `e > 0`: rate decreases...
-  - **Convention clarification:** We use positive Kp and: `raw_rate = RAY + Kp * e(t)` where positive e → positive correction → rate above RAY.
-
-**Using positive Kp convention:**
+- `Kp = 5_000_000_000_000_000_000_000_000` (= 5e24, **positive** gain in Ray)
+  - Convention: `Kp > 0`, `error = redemption - market`, positive error → rate increases (stabilizing)
 
 ```
-e(t) = (3.14 - 3.00) / 3.14 = 0.14 / 3.14 ≈ 0.04459 (dimensionless)
+e(t) = (p_r - p_m_ray) / p_r
+     = (3.14 * RAY - 3.00 * RAY) / (3.14 * RAY)
+     = 0.14 / 3.14 ≈ 0.04459 (dimensionless)
 
-// Convert to Ray units for multiplication:
+// Convert to Ray units:
 e_ray = 0.04459 * RAY ≈ 44_585_987_261_146_496_815_286_624
 
-// With Kp = 5e22 (Ray), Δt = 3600s:
-proportional_term = Kp * e_ray / RAY ≈ 5e22 * 4.459e25 / 1e27 ≈ 2.23e21
+// With Kp = 5e24 (Ray), using 256-bit intermediate:
+proportional_term = i256(Kp) * i256(e_ray) / i256(RAY)
+                  ≈ 5e24 * 4.459e25 / 1e27
+                  ≈ 2.23e23
 
-// raw_rate = RAY + proportional_term ≈ 1.000000002229... per second
-// Annualized: (1 + 2.23e-9)^(365*24*3600) ≈ 1.0755 → ~7.5% annual rate
+// raw_rate = RAY + proportional_term ≈ 1.000000000223... per second
+// Annualized: ~0.7% APY rate increase → incentivizes SAFEs to close → price rises
 ```
+
+LSC market is below target → positive error → positive correction → rate rises above RAY → correct negative feedback ✓
 
 ---
 
@@ -132,13 +133,14 @@ proportional_term = Kp * e_ray / RAY ≈ 5e22 * 4.459e25 / 1e27 ≈ 2.23e21
 enum PIControllerInstruction {
     /// One-time initialization
     Initialize {
-        kp: i128,                           // Ray (proportional gain, signed)
+        kp: i128,                           // Ray (proportional gain, signed; positive for negative feedback)
         ki: i128,                           // Ray (integral gain, signed)
         per_second_cumulative_leak: u128,   // Ray (leak factor ≤ RAY)
         update_delay: u64,                  // seconds between updates
         noise_barrier: u128,                // Wad (min error to act on)
         oracle_relayer_params_id: [u8; 32],
         lsc_market_oracle_id: [u8; 32],
+        system_params_id: [u8; 32],         // for settlement_active check in UpdateRate
     },
 
     /// Update redemption rate — the main operation. Callable by anyone.
@@ -188,6 +190,7 @@ pi_controller_state.error_integral = 0
 pi_controller_state.last_update_time = lsc_market_oracle.median_timestamp
 pi_controller_state.oracle_relayer_params_id = oracle_relayer_params_id
 pi_controller_state.lsc_market_oracle_id = lsc_market_oracle_id
+pi_controller_state.system_params_id = system_params_id
 pi_controller_state.last_proportional_term = 0
 pi_controller_state.last_integral_term = 0
 ```
@@ -196,7 +199,7 @@ pi_controller_state.last_integral_term = 0
 
 ### 3.3 `UpdateRate`
 
-**Description:** The main controller update. Reads market price and redemption price, computes new rate, stores it via OracleRelayer. Callable by anyone (permissionless), but only executes if enough time has passed.
+**Description:** The main controller update. Reads market price and redemption price, computes new rate, stores it via OracleRelayer. Callable by anyone (permissionless), but only executes if enough time has passed and settlement is not active.
 
 **Required Accounts:**
 
@@ -205,6 +208,7 @@ pi_controller_state.last_integral_term = 0
 | 0 | `pi_controller_state_id` | Yes | — | Controller state |
 | 1 | `oracle_relayer_params_id` | Yes | — | Redemption price + rate |
 | 2 | `lsc_market_oracle_id` | No | — | Current LSC market price + timestamp |
+| 3 | `system_params_id` | No | — | For settlement_active check |
 
 **Algorithm (pseudocode):**
 
@@ -213,7 +217,11 @@ fn update_rate(
     state: &mut PIControllerState,
     relayer: &mut OracleRelayerParams,
     market_oracle: &MedianOracle,
+    system_params: &SystemParams,
 ) -> Result<()> {
+    // 0. Settlement check: rate must not update during global settlement
+    assert!(!system_params.settlement_active, SettlementActive);
+
     // 1. Validate oracle
     assert!(market_oracle.valid, OracleInvalid);
     let current_time = market_oracle.median_timestamp;
@@ -232,10 +240,15 @@ fn update_rate(
 
     // 4. Compute error (dimensionless, in Ray units)
     // e = (p_r - p_m_ray) / p_r
+    // Sign convention: positive e means market is BELOW target → rate should INCREASE
     // Convert p_m from Wad to Ray: p_m_ray = p_m * RAY / WAD
-    let p_m_ray: i128 = (p_m as i128) * (RAY as i128) / (WAD as i128);
-    let error_ray: i128 = ((p_r - p_m_ray) as i128 * (RAY as i128)) / p_r as i128;
+    let p_m_ray: i128 = i256::from(p_m) * i256::from(RAY) / i256::from(WAD);
+    let error_ray: i128 = (i256::from(p_r - p_m_ray) * i256::from(RAY) / i256::from(p_r))
+        .try_into()
+        .expect("error_ray overflow");
     // error_ray is in Ray units (dimensionless * RAY)
+    // Positive when market < redemption (LSC below target)
+    // Negative when market > redemption (LSC above target)
 
     // 5. Check noise barrier
     if error_ray.unsigned_abs() < (state.noise_barrier as u128 * RAY / WAD) {
@@ -244,20 +257,41 @@ fn update_rate(
         return Ok(());
     }
 
-    // 6. Update integral with leak
+    // 6. Update integral with leak (MUST use 256-bit intermediate to avoid overflow)
     // I(t) = I(t-dt) * leak^dt + e * dt
-    let leak_factor = rpow(state.per_second_cumulative_leak, dt, RAY) as i128;
-    let integral_decayed: i128 = state.error_integral * leak_factor / RAY as i128;
-    let integral_new: i128 = integral_decayed + error_ray * dt as i128;
+    // leak^dt can be near RAY; error_integral can be large → multiplication can exceed i128::MAX
+    let leak_factor: i128 = rpow(state.per_second_cumulative_leak, dt, RAY) as i128;
+    let integral_decayed: i128 = (i256::from(state.error_integral) * i256::from(leak_factor)
+        / i256::from(RAY as i128))
+        .try_into()
+        .expect("integral_decayed overflow");
+    let integral_new: i128 = integral_decayed
+        .checked_add(error_ray.checked_mul(dt as i128).expect("error*dt overflow"))
+        .expect("integral_new overflow");
+    // Clamp integral to prevent runaway windup:
+    let integral_new = integral_new.clamp(i128::MIN / 2, i128::MAX / 2);
     state.error_integral = integral_new;
 
-    // 7. Compute proportional and integral terms
-    let proportional_term: i128 = state.kp * error_ray / RAY as i128;
-    let integral_term: i128 = state.ki * integral_new / RAY as i128;
+    // 7. Compute proportional and integral terms (MUST use 256-bit intermediate)
+    // kp (Ray) * error_ray (Ray) / RAY = Ray-dimensioned correction
+    // Products can reach ~5e24 * 1e27 = 5e51, which overflows i128::MAX (~1.7e38)
+    let proportional_term: i128 = (i256::from(state.kp) * i256::from(error_ray)
+        / i256::from(RAY as i128))
+        .try_into()
+        .expect("proportional_term overflow");
+    let integral_term: i128 = (i256::from(state.ki) * i256::from(integral_new)
+        / i256::from(RAY as i128))
+        .try_into()
+        .expect("integral_term overflow");
 
     // 8. Compute raw rate
     // raw_rate = RAY + proportional_term + integral_term
-    let raw_rate: i128 = RAY as i128 + proportional_term + integral_term;
+    // With Kp > 0: positive error (market < target) → positive proportional → rate > RAY
+    //              negative error (market > target) → negative proportional → rate < RAY
+    let raw_rate: i128 = (RAY as i128)
+        .checked_add(proportional_term)
+        .and_then(|r| r.checked_add(integral_term))
+        .expect("raw_rate overflow");
 
     // 9. Clamp to bounds
     let new_rate: u128 = clamp_i128_to_u128(
@@ -272,17 +306,21 @@ fn update_rate(
     state.last_integral_term = integral_term;
 
     // 11. Write new rate to OracleRelayer (via chained call)
-    // The PI controller passes its PDA as authorized
     relayer.redemption_rate = new_rate;
 
     Ok(())
 }
 ```
 
-**Note on signs:**
-- `Kp > 0` (positive gain): when `e > 0` (market below target), proportional term > 0, rate increases above RAY, making LSC debt more expensive and incentivizing price recovery.
-- `Ki > 0` (positive gain): integral of sustained positive error pushes rate up further.
-- If the market is persistently above target (`e < 0`), both terms go negative, and the rate can go below RAY (negative real rate), incentivizing minting more LSC.
+**Note on signs and Kp convention:**
+- `error_ray = redemption_price - market_price` (in Ray-normalized units)
+  - Positive when market < target (LSC below redemption price)
+  - Negative when market > target (LSC above redemption price)
+- `Kp > 0` (positive gain, **this is the correct/stable convention**):
+  - Market below target → `error > 0` → `proportional > 0` → `rate > RAY` → debt more expensive → less minting → price rises. ✓ (negative feedback, stabilizing)
+  - Market above target → `error < 0` → `proportional < 0` → `rate < RAY` → debt cheaper → more minting → price falls. ✓
+- `Ki > 0`: integral of sustained positive error pushes rate up further.
+- All Ray×Ray multiplications **must** use 256-bit intermediates. The implementation must use `i256`/`u256` for any product of two Ray-magnitude values before dividing by RAY.
 
 **Chained Calls:**
 ```
@@ -344,7 +382,7 @@ pi_controller_state.last_integral_term = 0
 
 | Parameter | Recommended Value | Notes |
 |---|---|---|
-| `kp` (Kp) | `5_000_000_000_000_000_000_000_000` (5e24, Ray) | Proportional gain. Start conservative. |
+| `kp` (Kp) | `5_000_000_000_000_000_000_000_000` (5e24, Ray) | Proportional gain (positive). Start conservative. All Ray×Ray products need i256 intermediates. |
 | `ki` (Ki) | `1_000_000_000_000_000_000_000` (1e21, Ray/s) | Integral gain. Much smaller than Kp. |
 | `per_second_cumulative_leak` | `999_999_920_000_000_000_000_000_000` (≈ RAY * 0.99999992) | ~68% decay per 1 year |
 | `update_delay` | `3600` (1 hour) | Rate updated at most once per hour |
