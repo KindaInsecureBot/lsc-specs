@@ -33,7 +33,7 @@ The following operations involve system-wide state that must be visible for the 
 | `TaxCollector::AccrueStabilityFee` | Updates accumulated_rate, which all SAFEs depend on |
 | `LiquidationEngine::LiquidateSafe` | Liquidation must be publicly observable for auditing |
 | `CollateralAuctionHouse::BuyCollateral` | Auction mechanics require public bid visibility |
-| `AccountingEngine::AuctionSurplus/Debt` | System health auctions must be transparent |
+| `AccountingEngine::AuctionSurplus` | System health auctions must be transparent |
 | `GlobalSettlement::TriggerSettlement` | Emergency actions must be publicly visible |
 | `CollateralTypeAccount` (all fields) | Safety ratio, debt ceiling, accumulated_rate — all programs read these |
 | `SystemParamsAccount` | Global configuration; must be readable by all programs |
@@ -102,7 +102,7 @@ Oracle keepers submit prices publicly. There is no privacy for oracle data. Orac
 
 ### 3.6 Auction Privacy
 
-Auctions (CollateralAuction, SurplusAuction, DebtAuction) must be public:
+Auctions (CollateralAuction, SurplusAuction) must be public:
 - Bidders need to see current bids to make competitive offers
 - Auction outcomes must be publicly verifiable
 - Anti-front-running measures (commit-reveal) are possible but add complexity; out of scope for v1
