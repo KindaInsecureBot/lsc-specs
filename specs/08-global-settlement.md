@@ -459,8 +459,8 @@ TokenProgram::Transfer {
 | Trigger | `TriggerSettlement` | Governance | Emergency |
 | Freeze | `FreezeCollateralType` | Anyone | Immediately after trigger |
 | Process | `ProcessSAFEs` | Anyone | After all types frozen |
-| SAFE Redemption | `RedeemCollateral` | SAFE owners | Up to SAFE_REDEMPTION_PERIOD (3 days) |
-| Set Rate | `SetFinalRedemptionRate` | Anyone | After SAFE_REDEMPTION_PERIOD |
+| SAFE Redemption | `RedeemCollateral` | SAFE owners | Up to `state.safe_redemption_period` (default 3 days) |
+| Set Rate | `SetFinalRedemptionRate` | Anyone | After `state.safe_redemption_period` |
 | LSC Redemption | `RedeemLSC` | LSC holders | After rate is set, indefinitely |
 
 ---
