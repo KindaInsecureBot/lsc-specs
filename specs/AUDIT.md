@@ -179,7 +179,7 @@ The `Mint` instruction checks `definition_account.is_authorized`. This `is_autho
 
 **The correct mechanism:** The LSC token definition account ID must itself be a **PDA of LSC_ENGINE_ID**. Then, when LSCEngine issues a chained call to `TokenProgram::Mint`, it includes the PDA seed for the definition in `ChainedCall.pda_seeds`, which causes the ledger to set `definition_account.is_authorized = true` for that PDA.
 
-The spec never specifies that the LSC token definition must be a PDA of LSCEngine, and never explains the `pda_seeds` mechanism for chained call authorization. Without this, there is no mechanism for LSCEngine to mint LSC. Note: the LSC system does not mint LOGOS — there is no DebtAuctionHouse in this design.
+The spec never specifies that the LSC token definition must be a PDA of LSCEngine, and never explains the `pda_seeds` mechanism for chained call authorization. Without this, there is no mechanism for LSCEngine to mint LSC. Note: the LSC system does not mint LOGOS — LSC programs only hold and transfer existing LOGOS tokens.
 
 ### 2.5 ChainedCall PDA Seeds Authorization Mechanism Never Explained 🟡
 
@@ -383,8 +383,6 @@ The spec has been updated. `AccountingEngineParamsAccount` now stores `liquidati
 ```
 liquidation_engine_params_id.id == accounting_params.liquidation_engine_params_id
 ```
-
-> **Note:** Prior versions of this spec referenced `accounting_params.debt_auction_params_id` (a stale reference to the since-removed DebtAuctionHouse). That reference has been removed from the spec and replaced with `liquidation_engine_params_id`.
 
 ### 4.4 GlobalSettlementError Has Duplicate Variant 🟡
 
@@ -616,7 +614,7 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 
 **I-02: PushDebt Authorization Check (Resolved)**
 - **File:** 07-accounting-engine.md §1.3
-- **Status:** ✅ Fixed. `AccountingEngineParamsAccount` now includes `liquidation_engine_params_id: [u8; 32]`. The `PushDebt` validation checks against this field. The stale `debt_auction_params_id` reference (from the removed DebtAuctionHouse) has been eliminated.
+- **Status:** ✅ Fixed. `AccountingEngineParamsAccount` now includes `liquidation_engine_params_id: [u8; 32]`. The `PushDebt` validation checks against this field.
 
 ---
 
@@ -655,50 +653,49 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 
 ---
 
-**I-09: PIControllerStateAccount integral_period_size Field is Spurious**
+**I-08: PIControllerStateAccount integral_period_size Field is Spurious**
 - **File:** 02-account-schemas.md §3.1
 - **Problem:** Field not initialized, not used, not in parameter table. Doc comments are misaligned.
 - **Fix:** Remove `integral_period_size: u64`. Fix doc comment alignment for `per_second_cumulative_leak`.
 
 ---
 
-**I-10: GlobalSettlementError Duplicate Unauthorized Variant**
+**I-09: GlobalSettlementError Duplicate Unauthorized Variant**
 - **File:** 08-global-settlement.md §6
 - **Problem:** Two `Unauthorized = 6001` and `Unauthorized = 6014` entries. Compilation error.
 - **Fix:** The second entry (6014) appears to be a duplicate. Identify what error was intended (likely related to an edge case in SAFE redemption) and rename accordingly. Renumber to avoid gaps.
 
 ---
 
-**I-11: Chained Call pda_seeds Not Specified for Any Instruction**
+**I-10: Chained Call pda_seeds Not Specified for Any Instruction**
 - **File:** All specs with chained calls
 - **Problem:** The mechanism by which programs authorize PDAs in chained calls (`ChainedCall.pda_seeds`) is never explained. Implementers cannot know which PDA seeds to include.
 - **Fix:** In the spec introduction (or 09-token-integration.md), explain the `pda_seeds` mechanism. For each chained call, add a `pda_seeds` column specifying which seeds to include.
 
 ---
 
-**I-12: CollateralAuction StartAuction Missing collateral_type_id Parameter**
+**I-11: CollateralAuction StartAuction Missing collateral_type_id Parameter**
 - **File:** 06-liquidation-engine.md §3.3
 - **Problem:** State transition references `collateral_type_id` but it's not in instruction parameters or required accounts.
 - **Fix:** Add `collateral_type_id: [u8; 32]` to the `StartAuction` instruction parameters (or add the `collateral_type_id` account to required accounts).
 
 ---
 
-**I-13: SurplusAuction LOGOS Holding Account Never Initialized**
+**I-12: SurplusAuction LOGOS Holding Account Never Initialized**
 - **File:** 07-accounting-engine.md §2.3 (IncreaseBidSize)
 - **Problem:** `auction_logos_holding_id` (SurplusAuction) is used but never created.
 - **Fix:** Add initialization of this holding account in `SurplusAuctionHouse::StartAuction` using a `TokenProgram::InitializeAccount` chained call.
-- **Note:** The DebtAuction `auction_lsc_holding_id` finding is no longer applicable — the DebtAuctionHouse has been removed.
 
 ---
 
-**I-14: PIController UpdateRate Must Check settlement_active**
+**I-13: PIController UpdateRate Must Check settlement_active**
 - **File:** 05-pi-controller.md §3.3
 - **Problem:** After global settlement, PIController should stop updating rates. No check present.
 - **Fix:** Add `system_params_id (read)` to `UpdateRate` required accounts. Add validation: `assert!(!system_params.settlement_active, SettlementActive)`.
 
 ---
 
-**I-15: RedeemCollateral Authorization Condition is Misleading**
+**I-14: RedeemCollateral Authorization Condition is Misleading**
 - **File:** 08-global-settlement.md §3.5
 - **Problem:** `assert!(collateral_type.settlement_processed == false || collateral_type.active == false)` is always true (since `FreezeCollateralType` sets `active = false` and `settlement_processed` is only true after `ProcessSAFEs`). The intent seems to be "collateral type has been frozen" but the condition doesn't cleanly express this.
 - **Fix:** Replace with `assert!(collateral_type.active == false, CollateralTypeNotFrozen)` or check `settlement_state.active && collateral_type.final_collateral_price > 0`.
@@ -753,16 +750,15 @@ The timestamp model says a single keeper can jump only 2 hours. But if a majorit
 | I-03 | GlobalDebtAccount.total_debt not updated in UpdateAccumulatedRate | 🟡 IMPORTANT | 03 |
 | I-04 | safe_nonce and vault_nonce fields dead/unused | 🟡 IMPORTANT | 02, 03 |
 | I-05 | RestartAuction discount_increment undefined | 🟡 IMPORTANT | 06 |
-| I-06 | ~~DecreaseSoldAmount first-bid validation undefined variable~~ (N/A — DebtAuction removed) | ~~🟡 IMPORTANT~~ | 07 |
-| I-07 | SurplusAuctionHouseParamsAccount missing (DebtAuction part N/A) | 🟡 IMPORTANT | 02, 07 |
-| I-08 | OracleConfigAccount missing max_timestamp_jump field | 🟡 IMPORTANT | 02, 04 |
-| I-09 | PIControllerStateAccount spurious integral_period_size field | 🟡 IMPORTANT | 02 |
-| I-10 | GlobalSettlementError duplicate Unauthorized variant | 🟡 IMPORTANT | 08 |
-| I-11 | pda_seeds for chained call authorization never explained | 🟡 IMPORTANT | 03, 06, 07, 08, 09 |
-| I-12 | CollateralAuction StartAuction missing collateral_type_id | 🟡 IMPORTANT | 06 |
-| I-13 | SurplusAuction LOGOS holding account never initialized (DebtAuction part N/A) | 🟡 IMPORTANT | 07 |
-| I-14 | PIController UpdateRate doesn't check settlement_active | 🟡 IMPORTANT | 05 |
-| I-15 | RedeemCollateral authorization condition misleading | 🟡 IMPORTANT | 08 |
+| I-06 | SurplusAuctionHouseParamsAccount missing | 🟡 IMPORTANT | 02, 07 |
+| I-07 | OracleConfigAccount missing max_timestamp_jump field | 🟡 IMPORTANT | 02, 04 |
+| I-08 | PIControllerStateAccount spurious integral_period_size field | 🟡 IMPORTANT | 02 |
+| I-09 | GlobalSettlementError duplicate Unauthorized variant | 🟡 IMPORTANT | 08 |
+| I-10 | pda_seeds for chained call authorization never explained | 🟡 IMPORTANT | 03, 06, 07, 08, 09 |
+| I-11 | CollateralAuction StartAuction missing collateral_type_id | 🟡 IMPORTANT | 06 |
+| I-12 | SurplusAuction LOGOS holding account never initialized | 🟡 IMPORTANT | 07 |
+| I-13 | PIController UpdateRate doesn't check settlement_active | 🟡 IMPORTANT | 05 |
+| I-14 | RedeemCollateral authorization condition misleading | 🟡 IMPORTANT | 08 |
 | M-01 | Settlement phase typo ("SAFERS") | 🟢 MINOR | 08 |
 | M-02 | Kp sign convention example confusing | 🟢 MINOR | 05 |
 | M-03 | Liquidation chained call count mismatch (3 vs 4) | 🟢 MINOR | 06 |

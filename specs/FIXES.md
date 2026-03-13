@@ -65,8 +65,6 @@ system_debt_queue = ACCOUNTING_ENGINE_ID.derive(compute_pda_seed(b"system_debt_q
 
 surplus_auction  = SURPLUS_AUCTION_HOUSE_ID.derive(compute_pda_seed(b"surplus_auction_params"))
 
-// debt_auction PDA removed — DebtAuctionHouse has been removed from the LSC system
-
 global_settlement = GLOBAL_SETTLEMENT_ID.derive(compute_pda_seed(b"global_settlement_state"))
 
 settlement_collateral = GLOBAL_SETTLEMENT_ID.derive(compute_pda_seed(b"settlement_collateral" || collateral_type_id[32]))
@@ -155,8 +153,6 @@ Update the `SubmitPrice` spec in 04 to read `max_timestamp_jump` from `OracleCon
 ### Fix 2.4 — Add SurplusAuctionHouseParamsAccount [IMPORTANT — Audit §1.5]
 
 **Problem:** `SurplusAuctionHouse::Initialize` accepts system parameters, but no params account schema is defined in spec 02.
-
-> **Note:** The `DebtAuctionHouseParamsAccount` finding is no longer applicable — the DebtAuctionHouse has been removed from the LSC system.
 
 **Change:** Add:
 
@@ -452,13 +448,7 @@ The required accounts for `UpdateAccumulatedRate` must include `global_debt_id (
 
 **Status:** The spec has been updated. `AccountingEngineParamsAccount` now stores `liquidation_engine_params_id: [u8; 32]`. `PushDebt` validation correctly uses this field.
 
-> **Historical note:** An earlier draft of the spec referenced `accounting_engine_params.debt_auction_params_id` (a stale field from the removed DebtAuctionHouse). The field has been replaced with `liquidation_engine_params_id` and the authorization check correctly validates the calling LiquidationEngine.
-
-### Fix 7.3 — ~~DecreaseSoldAmount: Replace initial_mint_amount Reference~~ (N/A — DebtAuction Removed)
-
-> **Not applicable.** The DebtAuctionHouse and `DecreaseSoldAmount` have been removed.
-
-### Fix 7.4 — Initialize SurplusAuction LOGOS Holding Account [IMPORTANT]
+### Fix 7.3 — Initialize SurplusAuction LOGOS Holding Account [IMPORTANT]
 
 **Problem:** `SurplusAuctionHouse::StartAuction` uses `auction_logos_holding_id` but never initializes it as a Token Program holding account.
 
@@ -471,8 +461,6 @@ ChainedCall → TokenProgram::InitializeAccount
   // After this call, auction_logos_holding_id.program_owner = TOKEN_PROGRAM_ID
   // and is ready to hold LOGOS bids during the auction
 ```
-
-> **Note:** The `DebtAuction::Initialize` auction holding account finding is no longer applicable.
 
 ---
 
@@ -686,12 +674,12 @@ ChainedCall → LSCEngine::UpdateAccumulatedRate {
 | File | Critical Fixes | Important Fixes |
 |---|---|---|
 | 01-system-architecture.md | PDA format (C4), LSC token def as PDA (C3) | ChainedCall pda_seeds doc |
-| 02-account-schemas.md | — | Vault owner, spurious integral_period_size, max_timestamp_jump, surplus auction params (debt auction N/A), safe_redemption_period |
+| 02-account-schemas.md | — | Vault owner, spurious integral_period_size, max_timestamp_jump, surplus auction params, safe_redemption_period |
 | 03-core-engine.md | Burn order (C1), InitializeAccount (C2), RepayDebt unit error (C6), GenerateDebt pda_seeds (C3) | UpdateAccumulatedRate parameter |
 | 04-oracle-system.md | — | max_timestamp_jump from config |
 | 05-pi-controller.md | i128 overflow (C7) | Kp sign convention, settlement check |
 | 06-liquidation-engine.md | — | Chained call count, discount_increment, StartAuction params |
-| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth (✅ resolved), SurplusAuction holding account init (DebtAuction parts N/A) |
+| 07-accounting-engine.md | — | global_debt.total_debt update, PushDebt auth (✅ resolved), SurplusAuction holding account init |
 | 08-global-settlement.md | FreezeCollateralType cross-program (C9), settlement accounting (C8) | Duplicate error code |
 | 09-token-integration.md | InitializeAccount order (C2), Burn order (C1) | — |
 | NEW: 03b-tax-collector.md | TaxCollector specification (C5) | — |
