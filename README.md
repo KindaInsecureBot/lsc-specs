@@ -71,6 +71,12 @@ The specs are written to be **implementation-ready**. An experienced Rust develo
 | 11 | [specs/11-security-considerations.md](specs/11-security-considerations.md) | Attack vectors, mitigations, implementation checklist, known RAI issues |
 | 12 | [specs/12-parameters.md](specs/12-parameters.md) | All system parameters with types, initial values, ranges, and governance |
 
+### Reference
+
+| # | File | Contents |
+|---|---|---|
+| 13 | [specs/13-rai-to-lez-mapping.md](specs/13-rai-to-lez-mapping.md) | RAI/GEB → LSC/LEZ mapping: contracts, functions, storage, EVM concepts, and key differences |
+
 ---
 
 ## Program Summary
