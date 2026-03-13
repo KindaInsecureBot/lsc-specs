@@ -187,7 +187,8 @@ while amount > 0 && entry_count > 0:
 ```
 TokenProgram::Burn {
     amount_to_burn: lsc_to_burn_wad,
-    // accounts: [system_surplus_id (PDA auth), lsc_token_def_id]
+    // accounts: [lsc_token_def_id, system_surplus_id (PDA auth)]
+    // Note: definition account first, then holder (authorized)
 }
 ```
 
@@ -597,7 +598,8 @@ TokenProgram::Transfer {
 // 2. Burn LOGOS bids (deflationary)
 TokenProgram::Burn {
     amount_to_burn: auction.bid_amount,
-    // accounts: [auction_logos_holding_id (PDA auth), logos_token_def_id]
+    // accounts: [logos_token_def_id, auction_logos_holding_id (PDA auth)]
+    // Note: definition account first, then holder (authorized)
 }
 ```
 

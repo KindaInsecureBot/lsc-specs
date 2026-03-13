@@ -420,7 +420,8 @@ collateral_redemption.total_lsc_redeemed += lsc_amount * RAY  // track in Rad
 // 1. Burn LSC
 TokenProgram::Burn {
     amount_to_burn: lsc_amount,
-    // accounts: [holder_lsc_holding_id (auth), lsc_token_def_id]
+    // accounts: [lsc_token_def_id, holder_lsc_holding_id (auth)]
+    // Note: definition account first, then holder (authorized)
 }
 
 // 2. Send LOGOS to holder

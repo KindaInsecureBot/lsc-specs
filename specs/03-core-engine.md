@@ -518,7 +518,8 @@ let lsc_to_burn = (amount * accumulated_rate) / RAY;  // Wad
 
 TokenProgram::Burn {
     amount_to_burn: lsc_to_burn,
-    // accounts: [caller_lsc_holding_id (auth), lsc_token_def_id]
+    // accounts: [lsc_token_def_id, caller_lsc_holding_id (auth)]
+    // Note: definition account first, then holder (authorized)
 }
 ```
 
